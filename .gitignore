@@ -1,0 +1,17 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller
+build/
+dist/
+
+# Secrets
+.streamlit/secrets.toml
+
+# Local environment
+.env
+.env.*
+
+# Claude Code local settings
+.claude/settings.local.json
