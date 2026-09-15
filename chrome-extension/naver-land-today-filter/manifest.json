@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "네이버 부동산 오늘 매물 필터",
+  "version": "1.0.0",
+  "description": "네이버 부동산(*.land.naver.com) 매물 API 응답을 가로채 오늘 등록/확인된 매물만 화면에 남깁니다.",
+  "content_scripts": [
+    {
+      "matches": ["https://*.land.naver.com/*"],
+      "js": ["injected.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}
