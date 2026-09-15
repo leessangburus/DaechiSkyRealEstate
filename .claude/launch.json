@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "main-app",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "main_app.py", "--server.headless", "true", "--server.port", "8505"],
+      "port": 8505
+    },
+    {
       "name": "naver-land-app",
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "streamlit", "run", "naver_land_app.py", "--server.headless", "true"],

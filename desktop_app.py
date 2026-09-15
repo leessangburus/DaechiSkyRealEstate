@@ -36,7 +36,7 @@ def run_as_streamlit_server(port: int) -> None:
     sys.argv = [
         "streamlit",
         "run",
-        resource_path("naver_land_app.py"),
+        resource_path("main_app.py"),
         "--server.port",
         str(port),
         "--server.headless",

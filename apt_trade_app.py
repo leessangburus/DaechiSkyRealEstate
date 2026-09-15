@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-아파트 매매 실거래가 조회기 (Streamlit 앱)
+아파트 매매/전월세 실거래가 조회기 (Streamlit 앱)
 
 실행:
   streamlit run apt_trade_app.py
 
 기능:
-  - 자주 찾는 지역/단지(강남구·서초구·송파구·4단지·대치동·도곡동) 또는 법정동코드 직접 입력
-  - "오늘/이번주/이번달 실거래가" 버튼으로 바로 조회, 또는 시작월~종료월 직접 지정
-  - 조회 결과를 단지별·월별 건수로 요약 표시
-  - 단지명/법정동/전용면적/거래금액으로 결과 필터링, 엑셀 다운로드
+  - 상단 "매매"/"전·월세" 버튼으로 조회 대상 전환
+  - 자주 찾는 지역/단지(강남구·서초구·송파구·4단지·대치동·도곡동) 또는 시/도-시/군/구-동 선택
+  - "오늘/이번주/이번달/지난달/올해/지난해" 버튼으로 바로 조회, 또는 시작월~종료월 직접 지정
+  - 매매: 조회 결과를 구별·동별·단지별·월별 건수로 요약 표시, 단지명/법정동/전용면적/거래금액 필터, 엑셀 다운로드
+  - 전·월세: API가 제공하는 전 필드를 표로 표시, 엑셀 다운로드 (1차 버전 — 화면 구성은 추후 피드백 반영 예정)
 """
 
 import html as html_lib
@@ -24,18 +25,23 @@ import streamlit as st
 import apt_trade_core as core
 
 
-def _recent_year_months_asc(n: int = 36) -> list:
-    """오늘 기준 최근 n개월을 ['202401', ..., '202409'] 처럼 오래된 순으로 반환."""
+# 아파트 매매 실거래가 신고 의무화 제도 시행일(2006-01-01) — 실거래가 API가 실제로 제공하는
+# 가장 오래된 기간이라, "시작월" 선택지를 이 시점까지 전부 열어준다.
+EARLIEST_DEAL_YM = "200601"
+
+
+def _all_year_months_asc(start_ym: str = EARLIEST_DEAL_YM) -> list:
+    """start_ym부터 이번 달까지 전부를 ['200601', ..., '202609'] 처럼 오래된 순으로 반환."""
     today = date.today()
-    months_desc = []
-    y, m = today.year, today.month
-    for _ in range(n):
-        months_desc.append(f"{y:04d}{m:02d}")
-        m -= 1
-        if m == 0:
-            m = 12
-            y -= 1
-    return list(reversed(months_desc))
+    y, m = int(start_ym[:4]), int(start_ym[4:6])
+    months = []
+    while (y, m) <= (today.year, today.month):
+        months.append(f"{y:04d}{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return months
 
 
 def _ym_label(ym: str) -> str:
@@ -83,13 +89,14 @@ TABLE_COLUMNS = [
     ("거래유형", "거래유형", "dealtype"),
     ("매도자", "매도자", None),
     ("매수자", "매수자", None),
-    ("중개사소재지", "중개사소재지", None),
+    ("중개사소재지", "중개사소재지", "agentloc"),
     ("해제여부", "해제여부", None),
     ("해제사유발생일", "해제사유발생일", None),
     ("등기일자", "등기일자", None),
 ]
 
 NAME_TRUNCATE_LEN = 10
+AGENT_LOC_TRUNCATE_LEN = 7
 DEALING_GBN_SHORT = {"중개거래": "중개", "직거래": "직"}
 SQM_PER_PYEONG = 3.305785
 
@@ -152,6 +159,10 @@ def render_trade_table(df: pd.DataFrame, group_view: bool = False) -> str:
             elif mode == "dealtype":
                 text = DEALING_GBN_SHORT.get(value, value if not pd.isna(value) else "")
                 cells.append(f"<td>{_esc(text)}</td>")
+            elif mode == "agentloc":
+                full = "" if pd.isna(value) else str(value)
+                short = full if len(full) <= AGENT_LOC_TRUNCATE_LEN else full[:AGENT_LOC_TRUNCATE_LEN] + "…"
+                cells.append(f"<td class='trunc-cell' title='{_esc(full)}'>{_esc(short)}</td>")
             else:
                 cells.append(f"<td title='{_esc(value)}'>{_esc(value)}</td>")
 
@@ -177,11 +188,12 @@ table.at th[data-sort="asc"]::after {{ content: " \\25B2"; color: #3B82F6; }}
 table.at th[data-sort="desc"]::after {{ content: " \\25BC"; color: #3B82F6; }}
 table.at td {{
   padding: 5px 10px; border-bottom: 1px solid #eef0f3; border-right: 1px solid #eef0f3;
-  max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; text-align: center;
 }}
 table.at td:last-child {{ border-right: none; }}
 table.at td.apt-name {{ max-width: 100px; cursor: help; }}
-table.at td.price {{ font-weight: 700; }}
+table.at td.trunc-cell {{ max-width: 90px; cursor: help; }}
+table.at td.price {{ font-weight: 700; font-size: 1.5em; }}
 table.at .area-link {{ color: #2563EB; cursor: pointer; text-decoration: underline dotted; }}
 table.at .area-link:hover {{ text-decoration: underline; }}
 table.at tbody tr.grp-even {{ background: #DCEBFC; }}
@@ -281,6 +293,56 @@ def render_interactive_trade_table(df: pd.DataFrame, key: str, group_view: bool 
     return result.area_click
 
 
+# 단지별 요약 줄("단지명 N건, ...")도 표와 같은 이유로 CCv2 컴포넌트를 통해 그린다 —
+# 단지명 클릭을 감지해서 그 단지만 골라 보여주는 팝업을 띄우기 위함.
+_COMPLEX_SUMMARY = st.components.v2.component(
+    "apt_complex_summary",
+    html="<div id='complex-summary-root'></div>",
+    js=r"""
+export default function (component) {
+  const { data, parentElement, setTriggerValue } = component
+  const root = parentElement.querySelector('#complex-summary-root')
+  root.innerHTML = data.html || ""
+
+  root.onclick = (e) => {
+    const link = e.target.closest('.complex-link')
+    if (link) {
+      setTriggerValue('complex_click', link.dataset.apt || '')
+    }
+  }
+}
+""",
+)
+
+
+def render_complex_summary(df: pd.DataFrame) -> str:
+    complex_counts = df["단지명"].value_counts()
+    parts = [
+        f"<span class='complex-link' data-apt='{_esc(name)}'>{_esc(name)}</span> "
+        f"<span style='color:#DC2626; font-weight:700;'>{cnt}건</span>"
+        for name, cnt in complex_counts.items()
+    ]
+    return (
+        "<style>"
+        ".complex-link { cursor: pointer; color: #1E293B; text-decoration: underline dotted; }"
+        ".complex-link:hover { color: #2563EB; text-decoration: underline; }"
+        "</style>"
+        "<div style='max-height:5.4em; overflow-y:auto; line-height:1.8; "
+        "margin-bottom:4px; padding:2px 6px; border:1px solid #eef0f3; border-radius:4px;'>"
+        f"{', '.join(parts)}</div>"
+    )
+
+
+def render_complex_summary_component(df: pd.DataFrame, key: str):
+    """단지별 요약을 그리고, 단지명이 클릭됐으면 그 단지명을 반환한다(없으면 None)."""
+    result = _COMPLEX_SUMMARY(
+        data={"html": render_complex_summary(df)},
+        key=key,
+        on_complex_click_change=lambda: None,
+    )
+    return result.complex_click
+
+
 def build_export_df(df: pd.DataFrame) -> pd.DataFrame:
     """화면 표와 동일한 컬럼/단위로 엑셀 내보낼 DataFrame을 구성 (숫자는 문자열이 아닌 실수로)."""
     out = {}
@@ -297,6 +359,77 @@ def build_export_df(df: pd.DataFrame) -> pd.DataFrame:
         else:
             out[label] = series
     return pd.DataFrame(out)
+
+
+# 전월세 리스트/엑셀에서 화면 요청으로 제외한 컬럼들 (도로명 상세코드류 + 단지/지역 내부코드).
+# 지역코드는 구별 요약 집계에 여전히 필요해서 rent_df 자체에서는 빼지 않고, 여기 표시 단계에서만 뺀다.
+RENT_HIDDEN_COLUMNS = [
+    "도로명시군구코드", "도로명코드", "도로명일련번호코드", "도로명지상지하코드",
+    "도로명건물본번호코드", "도로명건물부번호코드", "단지일련번호", "지역코드",
+]
+
+
+def render_rent_table(df: pd.DataFrame, group_view: bool = False) -> str:
+    """전월세 결과를 보여주는 단순 표 (트렁케이션/색상 강조 없음).
+
+    1차 구현이라 매매 표(render_trade_table)와 달리 컬럼별 가공 없이, 숫자만 천단위
+    콤마로 보기 좋게 포맷한다. 화면 구성은 사용자 피드백을 받아 다듬을 예정.
+    """
+    columns = [c for c in df.columns if c != "_group_id" and c not in RENT_HIDDEN_COLUMNS]
+    header_cells = "<th>#</th>" + "".join(f"<th>{_esc(c)}</th>" for c in columns)
+
+    body_rows = []
+    for i, row in enumerate(df.to_dict(orient="records"), start=1):
+        cells = [f"<td>{i}</td>"]
+        for col in columns:
+            value = row.get(col)
+            if isinstance(value, (int, float)) and not pd.isna(value):
+                text = f"{value:,.0f}" if float(value).is_integer() else f"{value:,.2f}"
+            else:
+                text = _esc(value)
+            cells.append(f"<td>{text}</td>")
+
+        row_class = ""
+        if group_view:
+            gid = row.get("_group_id")
+            if gid is not None and not pd.isna(gid):
+                row_class = "grp-even" if int(gid) % 2 == 0 else "grp-odd"
+        body_rows.append(f"<tr class='{row_class}'>" + "".join(cells) + "</tr>")
+
+    return f"""
+<style>
+.at-wrap {{ max-height: 620px; overflow: auto; border: 1px solid #d9dde3; border-radius: 6px; }}
+table.at {{ border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }}
+table.at th {{
+  position: sticky; top: 0; background: #f5f7fa; padding: 6px 10px; text-align: center;
+  border-bottom: 1px solid #d9dde3; border-right: 1px solid #d9dde3; z-index: 1;
+  cursor: pointer; user-select: none;
+}}
+table.at th:last-child {{ border-right: none; }}
+table.at th:hover {{ background: #e9edf3; }}
+table.at th[data-sort="asc"]::after {{ content: " \\25B2"; color: #3B82F6; }}
+table.at th[data-sort="desc"]::after {{ content: " \\25BC"; color: #3B82F6; }}
+table.at td {{
+  padding: 5px 10px; border-bottom: 1px solid #eef0f3; border-right: 1px solid #eef0f3;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; text-align: center;
+}}
+table.at td:last-child {{ border-right: none; }}
+table.at tbody tr.grp-even {{ background: #DCEBFC; }}
+table.at tbody tr.grp-odd {{ background: #FCEEDC; }}
+table.at tbody tr:hover {{ background: #FCD34D !important; }}
+</style>
+<div class="at-wrap">
+  <table class="at{' grouped' if group_view else ''}">
+    <thead><tr>{header_cells}</tr></thead>
+    <tbody>{''.join(body_rows)}</tbody>
+  </table>
+</div>
+"""
+
+
+def render_interactive_rent_table(df: pd.DataFrame, key: str, group_view: bool = False) -> None:
+    """전월세 결과 표를 그린다 (헤더 클릭 정렬 가능, 매매의 전용면적 클릭 같은 상호작용은 없음)."""
+    _TRADE_TABLE(data={"html": render_rent_table(df, group_view=group_view)}, key=key, on_area_click_change=lambda: None)
 
 
 def _build_price_history_svg(matched: pd.DataFrame) -> str:
@@ -496,8 +629,61 @@ def _show_price_history_dialog(target: dict):
         st.rerun()
 
 
-st.set_page_config(page_title="아파트 실거래가 조회", layout="wide")
+def _close_complex_list_dialog():
+    st.session_state.trade_complex_list_target = None
 
+
+@st.dialog(" ", width="large", on_dismiss=_close_complex_list_dialog)
+def _show_complex_list_dialog(apt_name: str):
+    full_df = st.session_state.trade_df
+    if full_df.empty or "단지명" not in full_df.columns:
+        st.warning("표시할 데이터가 없습니다.")
+    else:
+        matched = full_df[full_df["단지명"] == apt_name].copy()
+        sort_cols = [c for c in ["계약년도", "계약월", "계약일"] if c in matched.columns]
+        if sort_cols:
+            matched = matched.sort_values(by=sort_cols, ascending=False, kind="stable")
+        matched = matched.reset_index(drop=True)
+
+        st.html(
+            f"<div style='font-size:1.4rem; font-weight:700;'>{_esc(apt_name)}</div>"
+            f"<div style='color:#555; margin-bottom:8px;'>총 {len(matched)}건</div>"
+        )
+        render_interactive_trade_table(matched, group_view=False, key="complex_list_table")
+
+    if st.button("닫기", key="complex_list_close_btn"):
+        _close_complex_list_dialog()
+        st.rerun()
+
+
+def _close_rent_complex_list_dialog():
+    st.session_state.rent_complex_list_target = None
+
+
+@st.dialog(" ", width="large", on_dismiss=_close_rent_complex_list_dialog)
+def _show_rent_complex_list_dialog(apt_name: str):
+    full_df = st.session_state.rent_df
+    if full_df.empty or "단지명" not in full_df.columns:
+        st.warning("표시할 데이터가 없습니다.")
+    else:
+        matched = full_df[full_df["단지명"] == apt_name].copy()
+        sort_cols = [c for c in ["계약년도", "계약월", "계약일"] if c in matched.columns]
+        if sort_cols:
+            matched = matched.sort_values(by=sort_cols, ascending=False, kind="stable")
+        matched = matched.reset_index(drop=True)
+
+        st.html(
+            f"<div style='font-size:1.4rem; font-weight:700;'>{_esc(apt_name)}</div>"
+            f"<div style='color:#555; margin-bottom:8px;'>총 {len(matched)}건</div>"
+        )
+        render_interactive_rent_table(matched, key="rent_complex_list_table")
+
+    if st.button("닫기", key="rent_complex_list_close_btn"):
+        _close_rent_complex_list_dialog()
+        st.rerun()
+
+
+# 페이지 설정(st.set_page_config)은 통합 진입점인 main_app.py에서 한 번만 호출한다.
 st.html("""
 <style>
 .block-container { padding-top: 2.5rem; padding-bottom: 1rem; }
@@ -521,11 +707,30 @@ if "trade_searched" not in st.session_state:
     st.session_state.trade_searched = False
 if "trade_chart_target" not in st.session_state:
     st.session_state.trade_chart_target = None
+if "trade_complex_list_target" not in st.session_state:
+    st.session_state.trade_complex_list_target = None
+if "trade_quick_period" not in st.session_state:
+    st.session_state.trade_quick_period = None
+if "rent_df" not in st.session_state:
+    st.session_state.rent_df = pd.DataFrame()
+if "rent_region_label" not in st.session_state:
+    st.session_state.rent_region_label = ""
+if "rent_period_label" not in st.session_state:
+    st.session_state.rent_period_label = ""
+if "rent_searched" not in st.session_state:
+    st.session_state.rent_searched = False
+if "rent_complex_list_target" not in st.session_state:
+    st.session_state.rent_complex_list_target = None
 
-MONTH_OPTIONS = _recent_year_months_asc(36)
+MONTH_OPTIONS = _all_year_months_asc()
+
+if "start_ym_sel" not in st.session_state:
+    st.session_state["start_ym_sel"] = MONTH_OPTIONS[max(0, len(MONTH_OPTIONS) - 6)]
+if "end_ym_sel" not in st.session_state:
+    st.session_state["end_ym_sel"] = MONTH_OPTIONS[-1]
 
 
-def _run_fetch(lawd_cd, start_ym, end_ym, region_label, region_preset, period_label, date_range=None):
+def _run_fetch(mode, lawd_cd, start_ym, end_ym, region_label, region_preset, period_label, date_range=None):
     log_box = st.empty()
 
     def log(ym: str, i: int, total: int):
@@ -533,7 +738,10 @@ def _run_fetch(lawd_cd, start_ym, end_ym, region_label, region_preset, period_la
 
     with st.spinner(f"{region_label} 실거래가 수집 중..."):
         try:
-            fetched = core.fetch_apt_trades_range(lawd_cd, start_ym, end_ym, on_progress=log)
+            if mode == "매매":
+                fetched = core.fetch_apt_trades_range(lawd_cd, start_ym, end_ym, on_progress=log)
+            else:
+                fetched = core.fetch_apt_rents_range(lawd_cd, start_ym, end_ym, on_progress=log)
             fetched = core.apply_region_preset(fetched, region_preset)
             if date_range is not None and not fetched.empty:
                 lo, hi = date_range
@@ -545,11 +753,17 @@ def _run_fetch(lawd_cd, start_ym, end_ym, region_label, region_preset, period_la
                     }
                 ).dt.date
                 fetched = fetched[(actual_date >= lo) & (actual_date <= hi)]
-            st.session_state.trade_df = fetched
-            st.session_state.trade_region_label = region_label
-            st.session_state.trade_period_label = period_label
-            st.session_state.trade_searched = True
-            st.session_state.trade_chart_target = None
+            if mode == "매매":
+                st.session_state.trade_df = fetched
+                st.session_state.trade_region_label = region_label
+                st.session_state.trade_period_label = period_label
+                st.session_state.trade_searched = True
+                st.session_state.trade_chart_target = None
+            else:
+                st.session_state.rent_df = fetched
+                st.session_state.rent_region_label = region_label
+                st.session_state.rent_period_label = period_label
+                st.session_state.rent_searched = True
         except (ValueError, core.AptTradeApiError) as e:
             st.error(str(e))
         except Exception as e:
@@ -557,9 +771,46 @@ def _run_fetch(lawd_cd, start_ym, end_ym, region_label, region_preset, period_la
     log_box.empty()
 
 
+def _on_mode_change():
+    """매매 <-> 전·월세 전환 시, 아래 지역/기간 선택과 조회 결과를 전부 초기화해서 빈 화면으로 되돌린다."""
+    st.session_state["quick_region_sel"] = None
+    st.session_state["sido_sel"] = None
+    st.session_state["sigungu_sel"] = None
+    st.session_state["dong_sel"] = None
+    st.session_state.trade_quick_period = None
+    months = _all_year_months_asc()
+    st.session_state["start_ym_sel"] = months[max(0, len(months) - 6)]
+    st.session_state["end_ym_sel"] = months[-1]
+
+    st.session_state.trade_df = pd.DataFrame()
+    st.session_state.trade_region_label = ""
+    st.session_state.trade_period_label = ""
+    st.session_state.trade_searched = False
+    st.session_state.trade_chart_target = None
+    st.session_state.trade_complex_list_target = None
+
+    st.session_state.rent_df = pd.DataFrame()
+    st.session_state.rent_region_label = ""
+    st.session_state.rent_period_label = ""
+    st.session_state.rent_searched = False
+    st.session_state.rent_complex_list_target = None
+
+
 # ====================== 사이드바: 지역 & 기간 선택 ======================
 with st.sidebar:
     st.markdown("## 🏢 아파트 실거래가")
+
+    trade_mode = st.segmented_control(
+        "조회 구분",
+        options=["매매", "전·월세"],
+        default="매매",
+        selection_mode="single",
+        required=True,
+        label_visibility="collapsed",
+        key="trade_mode",
+        on_change=_on_mode_change,
+    )
+
     st.header("1. 지역 선택")
 
     quick_region = st.pills(
@@ -567,6 +818,7 @@ with st.sidebar:
         options=list(core.REGION_PRESETS.keys()),
         selection_mode="single",
         label_visibility="collapsed",
+        key="quick_region_sel",
     )
 
     st.caption("또는 시/군/구/동에서 찾기 (전국)")
@@ -574,32 +826,24 @@ with st.sidebar:
     with col_sido:
         sido_sel = st.selectbox(
             "시/도", options=core.list_sido(), index=None, placeholder="시/도", label_visibility="collapsed",
+            key="sido_sel",
         )
     with col_sigungu:
         sigungu_options = [g["name"] for g in core.list_sigungu(sido_sel)] if sido_sel else []
         sigungu_sel = st.selectbox(
             "시/군/구", options=sigungu_options, index=None, placeholder="시/군/구",
-            label_visibility="collapsed", disabled=not sido_sel,
+            label_visibility="collapsed", disabled=not sido_sel, key="sigungu_sel",
         )
     with col_dong:
         sigungu_lawd = core.sigungu_lawd_cd(sido_sel, sigungu_sel) if sido_sel and sigungu_sel else None
         dong_options = core.list_dong(sigungu_lawd) if sigungu_lawd else []
         dong_sel = st.selectbox(
             "동", options=dong_options, index=None, placeholder="동(선택)",
-            label_visibility="collapsed", disabled=not sigungu_lawd,
+            label_visibility="collapsed", disabled=not sigungu_lawd, key="dong_sel",
         )
 
-    custom_code = st.text_input(
-        "법정동코드 직접 입력 (5자리)",
-        placeholder="예: 11680 (강남구) · code.go.kr에서 확인",
-    )
-
-    custom_code = custom_code.strip()
     region_preset = {}
-    if custom_code:
-        lawd_cd = custom_code
-        region_label = custom_code
-    elif sido_sel and sigungu_sel:
+    if sido_sel and sigungu_sel:
         lawd_cd = core.sigungu_lawd_cd(sido_sel, sigungu_sel)
         if dong_sel:
             region_preset = {"lawd_cd": lawd_cd, "dong_equals": dong_sel}
@@ -614,186 +858,387 @@ with st.sidebar:
         lawd_cd = None
         region_label = ""
 
-    code_invalid = bool(custom_code) and not (custom_code.isdigit() and len(custom_code) == 5)
-    if code_invalid:
-        st.warning("법정동코드는 숫자 5자리로 입력해주세요.")
-
     st.header("2. 조회 기간")
 
-    qcol1, qcol2, qcol3, qcol4 = st.columns(4)
-    today_clicked = qcol1.button("오늘", width="stretch")
-    week_clicked = qcol2.button("이번주", width="stretch")
-    month_clicked = qcol3.button("이번달", width="stretch")
-    last_month_clicked = qcol4.button("지난달", width="stretch")
+    def _quick_btn_type(name: str) -> str:
+        return "primary" if st.session_state.trade_quick_period == name else "secondary"
 
-    quick_fetch_blocked = not lawd_cd or code_invalid
-    if (today_clicked or week_clicked or month_clicked or last_month_clicked) and quick_fetch_blocked:
+    qcol1, qcol2, qcol3 = st.columns(3)
+    today_clicked = qcol1.button("오늘", width="stretch", type=_quick_btn_type("오늘"))
+    week_clicked = qcol2.button("이번주", width="stretch", type=_quick_btn_type("이번주"))
+    month_clicked = qcol3.button("이번달", width="stretch", type=_quick_btn_type("이번달"))
+
+    qcol4, qcol5, qcol6 = st.columns(3)
+    last_month_clicked = qcol4.button("지난달", width="stretch", type=_quick_btn_type("지난달"))
+    year_clicked = qcol5.button("올해", width="stretch", type=_quick_btn_type("올해"))
+    last_year_clicked = qcol6.button("지난해", width="stretch", type=_quick_btn_type("지난해"))
+
+    quick_fetch_blocked = not lawd_cd
+    any_quick_clicked = (
+        today_clicked or week_clicked or month_clicked
+        or last_month_clicked or year_clicked or last_year_clicked
+    )
+    if any_quick_clicked and quick_fetch_blocked:
         st.warning("지역을 먼저 선택해주세요.")
     elif today_clicked:
         t = date.today()
         ym = f"{t.year:04d}{t.month:02d}"
-        _run_fetch(lawd_cd, ym, ym, region_label, region_preset, f"오늘({t.strftime('%Y.%m.%d')})", date_range=(t, t))
+        st.session_state.trade_quick_period = "오늘"
+        st.session_state["start_ym_sel"] = ym
+        st.session_state["end_ym_sel"] = ym
+        _run_fetch(trade_mode, lawd_cd, ym, ym, region_label, region_preset, f"오늘({t.strftime('%Y.%m.%d')})", date_range=(t, t))
     elif week_clicked:
         t = date.today()
         mon, sun = _week_bounds(t)
         months = sorted({f"{mon.year:04d}{mon.month:02d}", f"{sun.year:04d}{sun.month:02d}"})
+        st.session_state.trade_quick_period = "이번주"
+        ym_this_month = f"{t.year:04d}{t.month:02d}"
+        st.session_state["start_ym_sel"] = ym_this_month
+        st.session_state["end_ym_sel"] = ym_this_month
         _run_fetch(
-            lawd_cd, months[0], months[-1], region_label, region_preset,
+            trade_mode, lawd_cd, months[0], months[-1], region_label, region_preset,
             f"이번주({mon.strftime('%m.%d')}~{sun.strftime('%m.%d')})", date_range=(mon, sun),
         )
     elif month_clicked:
         t = date.today()
         ym = f"{t.year:04d}{t.month:02d}"
-        _run_fetch(lawd_cd, ym, ym, region_label, region_preset, _ym_label(ym))
+        st.session_state.trade_quick_period = "이번달"
+        st.session_state["start_ym_sel"] = ym
+        st.session_state["end_ym_sel"] = ym
+        _run_fetch(trade_mode, lawd_cd, ym, ym, region_label, region_preset, _ym_label(ym))
     elif last_month_clicked:
         ym = _prev_month_ym(date.today())
-        _run_fetch(lawd_cd, ym, ym, region_label, region_preset, _ym_label(ym))
+        st.session_state.trade_quick_period = "지난달"
+        st.session_state["start_ym_sel"] = ym
+        st.session_state["end_ym_sel"] = ym
+        _run_fetch(trade_mode, lawd_cd, ym, ym, region_label, region_preset, _ym_label(ym))
+    elif year_clicked:
+        t = date.today()
+        ym_start, ym_end = f"{t.year:04d}01", f"{t.year:04d}{t.month:02d}"
+        st.session_state.trade_quick_period = "올해"
+        st.session_state["start_ym_sel"] = ym_start
+        st.session_state["end_ym_sel"] = ym_end
+        _run_fetch(trade_mode, lawd_cd, ym_start, ym_end, region_label, region_preset, f"{t.year}년(올해)")
+    elif last_year_clicked:
+        y = date.today().year - 1
+        ym_start, ym_end = f"{y:04d}01", f"{y:04d}12"
+        st.session_state.trade_quick_period = "지난해"
+        st.session_state["start_ym_sel"] = ym_start
+        st.session_state["end_ym_sel"] = ym_end
+        _run_fetch(trade_mode, lawd_cd, ym_start, ym_end, region_label, region_preset, f"{y}년(지난해)")
+
+    # 방금 누른 버튼의 강조 표시와 시작월/종료월 값이 이번 실행에 바로 반영되도록
+    # (버튼 자체의 색은 이미 이 실행 앞부분에서 그려졌기 때문에) 한 번 다시 그린다.
+    if any_quick_clicked and not quick_fetch_blocked:
+        st.rerun()
 
     st.caption("또는 기간을 직접 지정:")
     col_start, col_end = st.columns(2)
-    default_start_idx = max(0, len(MONTH_OPTIONS) - 6)
-    default_end_idx = len(MONTH_OPTIONS) - 1
     with col_start:
         start_ym = st.selectbox(
-            "시작월", options=MONTH_OPTIONS, index=default_start_idx, format_func=_ym_label,
+            "시작월", options=MONTH_OPTIONS, format_func=_ym_label, key="start_ym_sel",
         )
     with col_end:
         end_ym = st.selectbox(
-            "종료월", options=MONTH_OPTIONS, index=default_end_idx, format_func=_ym_label,
+            "종료월", options=MONTH_OPTIONS, format_func=_ym_label, key="end_ym_sel",
         )
 
-    fetch_disabled = not lawd_cd or code_invalid or start_ym > end_ym
+    fetch_disabled = not lawd_cd or start_ym > end_ym
     if start_ym > end_ym:
         st.warning("시작월이 종료월보다 늦습니다.")
 
     if st.button("3. 실거래가 불러오기", type="primary", width="stretch", disabled=fetch_disabled):
-        _run_fetch(lawd_cd, start_ym, end_ym, region_label, region_preset, f"{_ym_label(start_ym)} ~ {_ym_label(end_ym)}")
+        st.session_state.trade_quick_period = None
+        _run_fetch(trade_mode, lawd_cd, start_ym, end_ym, region_label, region_preset, f"{_ym_label(start_ym)} ~ {_ym_label(end_ym)}")
+        st.rerun()
 
 # ====================== 본문: 요약 & 필터 & 결과 ======================
-df = st.session_state.trade_df
+if trade_mode == "매매":
+    df = st.session_state.trade_df
 
-if df.empty:
-    if st.session_state.trade_searched:
+    if df.empty:
+        if st.session_state.trade_searched:
+            region_label = st.session_state.trade_region_label
+            period_label = st.session_state.trade_period_label
+            st.warning(
+                f"**{region_label} · {period_label}** 기간에 조회된 실거래 내역이 없습니다. "
+                "지역, 기간, 또는 4단지/대치동 같은 단지·동 필터를 확인해보세요."
+            )
+        else:
+            st.info("왼쪽에서 지역과 조회 기간을 고른 뒤 조회해주세요.")
+    else:
         region_label = st.session_state.trade_region_label
         period_label = st.session_state.trade_period_label
-        st.warning(
-            f"**{region_label} · {period_label}** 기간에 조회된 실거래 내역이 없습니다. "
-            "지역, 기간, 또는 4단지/대치동 같은 단지·동 필터를 확인해보세요."
-        )
-    else:
-        st.info("왼쪽에서 지역과 조회 기간을 고른 뒤 조회해주세요.")
-else:
-    region_label = st.session_state.trade_region_label
-    period_label = st.session_state.trade_period_label
-    st.markdown(f"#### {region_label} &nbsp;·&nbsp; {period_label} &nbsp;·&nbsp; 총 {len(df)}건")
-
-    if "단지명" in df.columns:
-        complex_counts = df["단지명"].value_counts()
-        complex_html = ", ".join(
-            f"{_esc(name)} <span style='color:#DC2626; font-weight:700;'>{cnt}건</span>"
-            for name, cnt in complex_counts.items()
-        )
-        st.html(
-            "<div style='max-height:5.4em; overflow-y:auto; line-height:1.8; "
-            "margin-bottom:4px; padding:2px 6px; border:1px solid #eef0f3; border-radius:4px;'>"
-            f"{complex_html}</div>"
+        n_complex = df["단지명"].nunique() if "단지명" in df.columns else 0
+        st.markdown(
+            f"#### {region_label} &nbsp;·&nbsp; {period_label} &nbsp;·&nbsp; "
+            f"총 {n_complex}개 단지 &nbsp;·&nbsp; {len(df)}건"
         )
 
-    if {"계약년도", "계약월"}.issubset(df.columns):
-        month_counts = df.groupby(["계약년도", "계약월"]).size().sort_index()
-        month_html = ", ".join(
-            f"{y}년 {m}월 <span style='color:#DC2626; font-weight:700;'>{cnt}건</span>"
-            for (y, m), cnt in month_counts.items()
-        )
-        st.html(f"<div style='line-height:1.8; margin-bottom:8px;'>{month_html}</div>")
-
-    filtered = df.copy()
-
-    row1, row2, row_group, row3, row4 = st.columns([1.3, 1.1, 0.9, 1.6, 1.6])
-
-    with row1:
-        name_filter = st.text_input("단지명 검색", placeholder="예: 대치우성")
-
-    dong_options = sorted(df["법정동"].dropna().unique()) if "법정동" in df.columns else []
-    with row2:
-        selected_dongs = st.multiselect("법정동", options=dong_options, placeholder="전체")
-
-    with row_group:
-        st.caption("단지별")
-        complex_group_view = st.toggle("단지별", value=False, label_visibility="collapsed")
-
-    price_range = None
-    if "거래금액(만원)" in df.columns and df["거래금액(만원)"].notna().any():
-        price_series = df["거래금액(만원)"].dropna()
-        p_min, p_max = float(price_series.min()), float(price_series.max())
-        if p_min < p_max:
-            with row3:
-                price_range = st.slider(
-                    "거래금액 범위 (억원)",
-                    min_value=p_min / 10000,
-                    max_value=p_max / 10000,
-                    value=(p_min / 10000, p_max / 10000),
-                    step=0.1,
+        if {"지역코드", "단지명"}.issubset(df.columns):
+            gu_parts = []
+            for code, g in df.groupby("지역코드"):
+                gu_name = core.sigungu_name_by_code(str(code))
+                gu_parts.append(
+                    f"{_esc(gu_name)} <b>{g['단지명'].nunique()}개단지</b> "
+                    f"<span style='color:#DC2626; font-weight:700;'>{len(g)}건</span>"
                 )
+            st.html(f"<div style='line-height:1.8; margin-bottom:2px;'>{' · '.join(gu_parts)}</div>")
 
-    area_range = None
-    if "전용면적" in df.columns and df["전용면적"].notna().any():
-        area_series = df["전용면적"].dropna()
-        a_min, a_max = float(area_series.min()), float(area_series.max())
-        if a_min < a_max:
-            with row4:
-                area_range = st.slider("전용면적(㎡) 범위", a_min, a_max, (a_min, a_max))
+        if {"법정동", "단지명"}.issubset(df.columns):
+            dong_parts = []
+            for dong_name, g in df.groupby("법정동"):
+                dong_parts.append(
+                    f"{_esc(dong_name)} <b>{g['단지명'].nunique()}개단지</b> "
+                    f"<span style='color:#DC2626; font-weight:700;'>{len(g)}건</span>"
+                )
+            st.html(
+                "<div style='max-height:5.4em; overflow-y:auto; line-height:1.8; "
+                "margin-bottom:2px; padding:2px 6px; border:1px solid #eef0f3; border-radius:4px;'>"
+                f"{' · '.join(dong_parts)}</div>"
+            )
 
-    # ---- 필터 적용 ----
-    if name_filter.strip():
-        filtered = filtered[filtered["단지명"].str.contains(name_filter.strip(), na=False)]
+        if "단지명" in df.columns:
+            clicked_complex = render_complex_summary_component(df, key="complex_summary")
+            if clicked_complex:
+                st.session_state.trade_complex_list_target = clicked_complex
+                st.session_state.trade_chart_target = None
 
-    if selected_dongs:
-        filtered = filtered[filtered["법정동"].isin(selected_dongs)]
+        if {"계약년도", "계약월"}.issubset(df.columns):
+            month_counts = df.groupby(["계약년도", "계약월"]).size().sort_index()
+            month_html = ", ".join(
+                f"{y}년 {m}월 <span style='color:#DC2626; font-weight:700;'>{cnt}건</span>"
+                for (y, m), cnt in month_counts.items()
+            )
+            st.html(f"<div style='line-height:1.8; margin-bottom:8px;'>{month_html}</div>")
 
-    if price_range is not None:
-        sel_min, sel_max = price_range
-        filtered = filtered[filtered["거래금액(만원)"].between(sel_min * 10000, sel_max * 10000)]
+        filtered = df.copy()
 
-    if area_range is not None:
-        filtered = filtered[filtered["전용면적"].between(area_range[0], area_range[1])]
+        row1, row2, row_group, row3, row4 = st.columns([1.3, 1.1, 0.9, 1.6, 1.6])
 
-    sort_cols = [c for c in ["계약년도", "계약월", "계약일"] if c in filtered.columns]
-    if sort_cols:
-        filtered = filtered.sort_values(by=sort_cols, ascending=False, kind="stable")
+        with row1:
+            name_filter = st.text_input("단지명 검색", placeholder="예: 대치우성")
 
-    if complex_group_view and "단지명" in filtered.columns and not filtered.empty:
-        # 단지가 여러 개 섞여있으면 단지별로, 한 단지만 보고 있으면 평형(전용면적)별로 색을 나눈다 —
-        # 어차피 단지가 하나뿐이면 단지별 그룹은 전부 같은 색이라 구분에 도움이 안 되기 때문.
-        if filtered["단지명"].nunique() > 1:
-            group_key = filtered["단지명"]
+        dong_options = sorted(df["법정동"].dropna().unique()) if "법정동" in df.columns else []
+        with row2:
+            selected_dongs = st.multiselect("법정동", options=dong_options, placeholder="전체")
+
+        with row_group:
+            st.caption("단지별")
+            complex_group_view = st.toggle("단지별", value=False, label_visibility="collapsed")
+
+        price_range = None
+        if "거래금액(만원)" in df.columns and df["거래금액(만원)"].notna().any():
+            price_series = df["거래금액(만원)"].dropna()
+            p_min, p_max = float(price_series.min()), float(price_series.max())
+            if p_min < p_max:
+                with row3:
+                    price_range = st.slider(
+                        "거래금액 범위 (억원)",
+                        min_value=p_min / 10000,
+                        max_value=p_max / 10000,
+                        value=(p_min / 10000, p_max / 10000),
+                        step=0.1,
+                    )
+
+        area_range = None
+        if "전용면적" in df.columns and df["전용면적"].notna().any():
+            area_series = df["전용면적"].dropna()
+            a_min, a_max = float(area_series.min()), float(area_series.max())
+            if a_min < a_max:
+                with row4:
+                    area_range = st.slider("전용면적(㎡) 범위", a_min, a_max, (a_min, a_max))
+
+        # ---- 필터 적용 ----
+        if name_filter.strip():
+            filtered = filtered[filtered["단지명"].str.contains(name_filter.strip(), na=False)]
+
+        if selected_dongs:
+            filtered = filtered[filtered["법정동"].isin(selected_dongs)]
+
+        if price_range is not None:
+            sel_min, sel_max = price_range
+            filtered = filtered[filtered["거래금액(만원)"].between(sel_min * 10000, sel_max * 10000)]
+
+        if area_range is not None:
+            filtered = filtered[filtered["전용면적"].between(area_range[0], area_range[1])]
+
+        sort_cols = [c for c in ["계약년도", "계약월", "계약일"] if c in filtered.columns]
+        if sort_cols:
+            filtered = filtered.sort_values(by=sort_cols, ascending=False, kind="stable")
+
+        if complex_group_view and "단지명" in filtered.columns and not filtered.empty:
+            # 단지가 여러 개 섞여있으면 단지별로, 한 단지만 보고 있으면 평형(전용면적)별로 색을 나눈다 —
+            # 어차피 단지가 하나뿐이면 단지별 그룹은 전부 같은 색이라 구분에 도움이 안 되기 때문.
+            if filtered["단지명"].nunique() > 1:
+                group_key = filtered["단지명"]
+            else:
+                group_key = (filtered["전용면적"] / SQM_PER_PYEONG).round()
+            group_ids, _ = pd.factorize(group_key)
+            filtered = filtered.assign(_group_id=group_ids)
+            filtered = filtered.sort_values(by="_group_id", kind="stable")
+
+        result_df = filtered.reset_index(drop=True)
+
+        clicked_area_payload = render_interactive_trade_table(result_df, group_view=complex_group_view, key="trade_table")
+        if clicked_area_payload:
+            try:
+                st.session_state.trade_chart_target = json.loads(clicked_area_payload)
+                st.session_state.trade_complex_list_target = None
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        st.caption(f"필터 적용 결과: {len(result_df)}건 / 전체 {len(df)}건")
+
+        if st.session_state.get("trade_chart_target"):
+            _show_price_history_dialog(st.session_state.trade_chart_target)
+        elif st.session_state.get("trade_complex_list_target"):
+            _show_complex_list_dialog(st.session_state.trade_complex_list_target)
+
+        export_df = build_export_df(result_df)
+        buf = io.BytesIO()
+        export_df.to_excel(buf, index=False, engine="openpyxl")
+        st.download_button(
+            "📥 엑셀로 다운로드 (지금 보이는 필터 결과)",
+            data=buf.getvalue(),
+            file_name=f"{region_label}_실거래가_{period_label.replace(' ', '')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+
+else:  # 전·월세 — 1차 버전: API 전 필드를 표로 그대로 보여준다 (요약/필터/팝업은 추후 피드백 후 추가)
+    rent_df = st.session_state.rent_df
+
+    if rent_df.empty:
+        if st.session_state.rent_searched:
+            r_region = st.session_state.rent_region_label
+            r_period = st.session_state.rent_period_label
+            st.warning(
+                f"**{r_region} · {r_period}** 기간에 조회된 전월세 실거래 내역이 없습니다. "
+                "지역, 기간, 또는 4단지/대치동 같은 단지·동 필터를 확인해보세요."
+            )
         else:
-            group_key = (filtered["전용면적"] / SQM_PER_PYEONG).round()
-        group_ids, _ = pd.factorize(group_key)
-        filtered = filtered.assign(_group_id=group_ids)
-        filtered = filtered.sort_values(by="_group_id", kind="stable")
+            st.info("왼쪽에서 지역과 조회 기간을 고른 뒤 조회해주세요.")
+    else:
+        r_region = st.session_state.rent_region_label
+        r_period = st.session_state.rent_period_label
+        n_complex = rent_df["단지명"].nunique() if "단지명" in rent_df.columns else 0
+        st.markdown(
+            f"#### {r_region} &nbsp;·&nbsp; {r_period} &nbsp;·&nbsp; "
+            f"총 {n_complex}개 단지 &nbsp;·&nbsp; {len(rent_df)}건"
+        )
 
-    result_df = filtered.reset_index(drop=True)
+        if {"지역코드", "단지명"}.issubset(rent_df.columns):
+            gu_parts = []
+            for code, g in rent_df.groupby("지역코드"):
+                gu_name = core.sigungu_name_by_code(str(code))
+                gu_parts.append(
+                    f"{_esc(gu_name)} <b>{g['단지명'].nunique()}개단지</b> "
+                    f"<span style='color:#DC2626; font-weight:700;'>{len(g)}건</span>"
+                )
+            st.html(f"<div style='line-height:1.8; margin-bottom:2px;'>{' · '.join(gu_parts)}</div>")
 
-    clicked_area_payload = render_interactive_trade_table(result_df, group_view=complex_group_view, key="trade_table")
-    if clicked_area_payload:
-        try:
-            st.session_state.trade_chart_target = json.loads(clicked_area_payload)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        if {"법정동", "단지명"}.issubset(rent_df.columns):
+            dong_parts = []
+            for dong_name, g in rent_df.groupby("법정동"):
+                dong_parts.append(
+                    f"{_esc(dong_name)} <b>{g['단지명'].nunique()}개단지</b> "
+                    f"<span style='color:#DC2626; font-weight:700;'>{len(g)}건</span>"
+                )
+            st.html(
+                "<div style='max-height:5.4em; overflow-y:auto; line-height:1.8; "
+                "margin-bottom:2px; padding:2px 6px; border:1px solid #eef0f3; border-radius:4px;'>"
+                f"{' · '.join(dong_parts)}</div>"
+            )
 
-    st.caption(f"필터 적용 결과: {len(result_df)}건 / 전체 {len(df)}건")
+        if "단지명" in rent_df.columns:
+            clicked_rent_complex = render_complex_summary_component(rent_df, key="rent_complex_summary")
+            if clicked_rent_complex:
+                st.session_state.rent_complex_list_target = clicked_rent_complex
 
-    if st.session_state.get("trade_chart_target"):
-        _show_price_history_dialog(st.session_state.trade_chart_target)
+        if {"계약년도", "계약월"}.issubset(rent_df.columns):
+            month_counts = rent_df.groupby(["계약년도", "계약월"]).size().sort_index()
+            month_html = ", ".join(
+                f"{y}년 {m}월 <span style='color:#DC2626; font-weight:700;'>{cnt}건</span>"
+                for (y, m), cnt in month_counts.items()
+            )
+            st.html(f"<div style='line-height:1.8; margin-bottom:8px;'>{month_html}</div>")
 
-    export_df = build_export_df(result_df)
-    buf = io.BytesIO()
-    export_df.to_excel(buf, index=False, engine="openpyxl")
-    st.download_button(
-        "📥 엑셀로 다운로드 (지금 보이는 필터 결과)",
-        data=buf.getvalue(),
-        file_name=f"{region_label}_실거래가_{period_label.replace(' ', '')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
-    )
+        rent_filtered = rent_df.copy()
+
+        rrow1, rrow2, rrow_group, rrow3, rrow4 = st.columns([1.3, 1.1, 0.9, 1.6, 1.6])
+
+        with rrow1:
+            rent_name_filter = st.text_input("단지명 검색", placeholder="예: 대치우성")
+
+        rent_dong_options = sorted(rent_df["법정동"].dropna().unique()) if "법정동" in rent_df.columns else []
+        with rrow2:
+            rent_selected_dongs = st.multiselect("법정동", options=rent_dong_options, placeholder="전체")
+
+        with rrow_group:
+            st.caption("단지별")
+            rent_group_view = st.toggle("단지별", value=False, label_visibility="collapsed")
+
+        rent_price_range = None
+        if "보증금액" in rent_df.columns and rent_df["보증금액"].notna().any():
+            rent_price_series = rent_df["보증금액"].dropna()
+            rp_min, rp_max = float(rent_price_series.min()), float(rent_price_series.max())
+            if rp_min < rp_max:
+                with rrow3:
+                    rent_price_range = st.slider(
+                        "보증금액 범위 (만원)", min_value=rp_min, max_value=rp_max, value=(rp_min, rp_max),
+                    )
+
+        rent_area_range = None
+        if "전용면적" in rent_df.columns and rent_df["전용면적"].notna().any():
+            rent_area_series = rent_df["전용면적"].dropna()
+            ra_min, ra_max = float(rent_area_series.min()), float(rent_area_series.max())
+            if ra_min < ra_max:
+                with rrow4:
+                    rent_area_range = st.slider("전용면적(㎡) 범위", ra_min, ra_max, (ra_min, ra_max))
+
+        # ---- 필터 적용 ----
+        if rent_name_filter.strip():
+            rent_filtered = rent_filtered[rent_filtered["단지명"].str.contains(rent_name_filter.strip(), na=False)]
+
+        if rent_selected_dongs:
+            rent_filtered = rent_filtered[rent_filtered["법정동"].isin(rent_selected_dongs)]
+
+        if rent_price_range is not None:
+            sel_min, sel_max = rent_price_range
+            rent_filtered = rent_filtered[rent_filtered["보증금액"].between(sel_min, sel_max)]
+
+        if rent_area_range is not None:
+            rent_filtered = rent_filtered[rent_filtered["전용면적"].between(rent_area_range[0], rent_area_range[1])]
+
+        rent_sort_cols = [c for c in ["계약년도", "계약월", "계약일"] if c in rent_filtered.columns]
+        if rent_sort_cols:
+            rent_filtered = rent_filtered.sort_values(by=rent_sort_cols, ascending=False, kind="stable")
+
+        if rent_group_view and "단지명" in rent_filtered.columns and not rent_filtered.empty:
+            if rent_filtered["단지명"].nunique() > 1:
+                rent_group_key = rent_filtered["단지명"]
+            else:
+                rent_group_key = (rent_filtered["전용면적"] / SQM_PER_PYEONG).round()
+            rent_group_ids, _ = pd.factorize(rent_group_key)
+            rent_filtered = rent_filtered.assign(_group_id=rent_group_ids)
+            rent_filtered = rent_filtered.sort_values(by="_group_id", kind="stable")
+
+        rent_result_df = rent_filtered.reset_index(drop=True)
+        render_interactive_rent_table(rent_result_df, group_view=rent_group_view, key="rent_table")
+
+        if st.session_state.get("rent_complex_list_target"):
+            _show_rent_complex_list_dialog(st.session_state.rent_complex_list_target)
+
+        st.caption(f"필터 적용 결과: {len(rent_result_df)}건 / 전체 {len(rent_df)}건")
+
+        rent_export_df = rent_result_df.drop(columns=["_group_id"] + RENT_HIDDEN_COLUMNS, errors="ignore")
+        buf = io.BytesIO()
+        rent_export_df.to_excel(buf, index=False, engine="openpyxl")
+        st.download_button(
+            "📥 엑셀로 다운로드 (지금 보이는 필터 결과)",
+            data=buf.getvalue(),
+            file_name=f"{r_region}_전월세_{r_period.replace(' ', '')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )

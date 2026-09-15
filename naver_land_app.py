@@ -19,6 +19,7 @@
 import asyncio
 import html as html_lib
 import io
+import json
 import re
 
 import pandas as pd
@@ -39,6 +40,60 @@ HEADER_LABELS = {
     "면적타입": "타입",
 }
 
+# table.rt 공통 스타일. 메인/팝업 결과표와 '동일매물' 팝업 표가 같이 쓴다 — 헤더 클릭 정렬
+# 기능도 _REALTOR_TABLE의 JS가 table.rt를 대상으로 동작해서 자동으로 같이 적용된다.
+_TABLE_STYLE = """
+<style>
+.rt-wrap { max-height: 650px; overflow: auto; border: 1px solid #d9dde3; border-radius: 6px; }
+table.rt { border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }
+table.rt th {
+  position: sticky; top: 0; background: #f5f7fa; padding: 6px 10px; text-align: left;
+  border-bottom: 1px solid #d9dde3; z-index: 1; cursor: pointer; user-select: none;
+}
+table.rt th:hover { background: #e9edf3; }
+table.rt th[data-sort="asc"]::after { content: " \\25B2"; color: #3B82F6; }
+table.rt th[data-sort="desc"]::after { content: " \\25BC"; color: #3B82F6; }
+table.rt td {
+  padding: 5px 10px; border-bottom: 1px solid #eef0f3; max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+table.rt td.narrow { max-width: 88px; }
+table.rt td.num { color: #999; text-align: right; max-width: 40px; }
+table.rt tr.grp-even { background: #DCEBFC; }
+table.rt tr.grp-odd { background: #FCEEDC; }
+table.rt tbody tr:hover { background: #B8D4F5 !important; }
+table.rt a { color: #3B82F6; text-decoration: none; }
+table.rt a:hover { text-decoration: underline; }
+table.rt .link { color: #3B82F6; cursor: pointer; }
+table.rt .link:hover { text-decoration: underline; }
+table.rt .grp-cell { cursor: pointer; color: #3B82F6; text-decoration: underline dotted; }
+table.rt .muted { color: #999; font-style: italic; }
+table.rt.rt-compact { width: auto; min-width: 360px; }
+table.rt.rt-compact td, table.rt.rt-compact th { padding: 7px 20px; }
+table.rt.rt-compact td.num-col { text-align: right; color: #2563EB; font-weight: 600; }
+</style>
+"""
+
+
+def render_sortable_table(headers: list, rows: list, compact: bool = False) -> str:
+    """헤더 클릭 정렬이 되는 간단한 table.rt를 만든다(_REALTOR_TABLE의 정렬 JS가 그대로 먹는다).
+    rows: 각 행은 셀 HTML 문자열의 리스트. 마지막 컬럼을 가격으로 보고 오른쪽 정렬한다."""
+    header_html = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+    body_html = []
+    last_idx = len(headers) - 1
+    for row in rows:
+        cells = "".join(
+            f"<td class='num-col'>{cell}</td>" if i == last_idx else f"<td>{cell}</td>"
+            for i, cell in enumerate(row)
+        )
+        body_html.append(f"<tr>{cells}</tr>")
+    table_cls = "rt rt-compact" if compact else "rt"
+    return (
+        _TABLE_STYLE
+        + f"<div class='rt-wrap'><table class='{table_cls}'>"
+        + f"<thead><tr>{header_html}</tr></thead><tbody>{''.join(body_html)}</tbody></table></div>"
+    )
+
 
 def _esc(value) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -51,9 +106,6 @@ def _short_date(value) -> str:
     if isinstance(value, str) and value.count(".") == 2:
         return value.split(".", 1)[1]
     return value if isinstance(value, str) else ""
-
-
-GROUP_KEY_COLS = ["단지명", "동", "층", "면적타입", "구분"]
 
 
 def render_results_table(
@@ -83,27 +135,32 @@ def render_results_table(
 
     header_cells = "".join(f"<th>{_esc(HEADER_LABELS.get(c, c))}</th>" for c in ["#"] + cols)
 
-    # 동일매물 그룹별로 '날짜/ 부동산명/ 가격' 목록을 날짜순→금액순으로 정리해서 마우스오버로 보여준다.
+    # 동일매물 그룹별로 '날짜/ 부동산명/ 가격' 목록을 날짜순→금액순으로 정리해서 클릭 시
+    # 팝업으로 보여준다(말풍선은 내용이 길면 잘려서 팝업으로 바꿈).
     # tooltip_source가 없으면(메인 표) df 자신의 _group_id로, 있으면(중개사 팝업 등)
     # 실제 비교 대상 전체를 단지/동/층/면적타입/구분 키로 다시 묶어서 계산한다.
     use_cross_ref = tooltip_source is not None
     group_summary = {}
+    cross_ref_key_cols = core.GROUP_KEY_COLS
     if use_cross_ref:
         pool = tooltip_source
         if "동일매물수" in pool.columns:
             pool = pool[pd.to_numeric(pool["동일매물수"], errors="coerce").fillna(1) > 1]
-        if all(c in pool.columns for c in GROUP_KEY_COLS + ["중개사무소", core.PRICE_COLUMN, "확인날짜"]):
-            for key, g in pool.groupby(GROUP_KEY_COLS):
+        if all(c in pool.columns for c in core.GROUP_KEY_COLS + ["중개사무소", core.PRICE_COLUMN, "확인날짜"]):
+            # core._postprocess()와 동일한 지문 컬럼(동일매물수/최저가/최고가)으로 세분화해서,
+            # 코어 쪽 그룹과 이 팝업의 교차대조 그룹이 항상 같은 기준으로 갈라지게 한다.
+            cross_ref_key_cols = core.dup_group_key_cols(pool)
+            for key, g in pool.groupby(cross_ref_key_cols):
                 if len(g) < 2:
                     continue
                 g = g.copy()
                 g["_price_num"] = g[core.PRICE_COLUMN].apply(core.parse_price_to_manwon)
                 g = g.sort_values(by=["확인날짜", "_price_num"], ascending=[False, True])
-                lines = [
-                    f"{_short_date(r['확인날짜'])}/ {r['중개사무소']}/ {r[core.PRICE_COLUMN]}"
+                rows = [
+                    {"date": r["확인날짜"], "realtor": r["중개사무소"], "price": r[core.PRICE_COLUMN]}
                     for _, r in g.iterrows()
                 ]
-                group_summary[key] = (len(g), "\n".join(lines))
+                group_summary[key] = rows
     elif all(c in df.columns for c in ["_group_id", "중개사무소", core.PRICE_COLUMN, "확인날짜"]):
         for gid, g in df.groupby("_group_id"):
             if pd.isna(gid):
@@ -111,11 +168,11 @@ def render_results_table(
             g = g.copy()
             g["_price_num"] = g[core.PRICE_COLUMN].apply(core.parse_price_to_manwon)
             g = g.sort_values(by=["확인날짜", "_price_num"], ascending=[False, True])
-            lines = [
-                f"{_short_date(r['확인날짜'])}/ {r['중개사무소']}/ {r[core.PRICE_COLUMN]}"
+            rows = [
+                {"date": r["확인날짜"], "realtor": r["중개사무소"], "price": r[core.PRICE_COLUMN]}
                 for _, r in g.iterrows()
             ]
-            group_summary[int(gid)] = "\n".join(lines)
+            group_summary[int(gid)] = rows
 
     body_rows = []
     for i, row_d in enumerate(df.to_dict(orient="records"), start=1):
@@ -145,53 +202,31 @@ def render_results_table(
                 else:
                     cells.append("<td class='muted' title='네이버 자체 중개사 계정이 아니라 외부 제휴 매체를 통해 올라온 매물이라 ID가 없습니다'>외부매체</td>")
             elif c == "동일매물":
+                rows = None
+                cell_text = text
                 if use_cross_ref:
-                    key = tuple(row_d.get(k) for k in GROUP_KEY_COLS)
-                    match = group_summary.get(key)
-                    if match:
-                        count, tooltip = match
-                        cells.append(
-                            f"<td class='grp-cell' data-grp-tooltip='{_esc(tooltip)}'>동일 {count}건</td>"
-                        )
-                    else:
-                        cells.append("<td>단독</td>")
+                    key = tuple(row_d.get(k) for k in cross_ref_key_cols)
+                    rows = group_summary.get(key)
+                    cell_text = f"동일 {len(rows)}건" if rows else "단독"
                 else:
-                    tooltip = group_summary.get(int(gid)) if pd.notna(gid) else None
-                    if tooltip:
-                        cells.append(f"<td class='grp-cell' data-grp-tooltip='{_esc(tooltip)}'>{text}</td>")
-                    else:
-                        cells.append(f"<td>{text}</td>")
+                    rows = group_summary.get(int(gid)) if pd.notna(gid) else None
+                if rows:
+                    title = " ".join(
+                        str(row_d.get(k, "")) for k in ["단지명", "동", "층", "면적타입"] if row_d.get(k)
+                    )
+                    trade = row_d.get("구분", "")
+                    title = f"{title} · {trade} · 동일매물 {len(rows)}건".strip(" ·")
+                    payload = _esc(json.dumps({"title": title, "rows": rows}, ensure_ascii=False))
+                    cells.append(f"<td class='grp-cell' data-grp-payload='{payload}'>{cell_text}</td>")
+                else:
+                    cells.append(f"<td>{cell_text}</td>")
             else:
                 cells.append(f"<td class='{cls}' title='{text}'>{text}</td>")
         body_rows.append(f"<tr class='{row_class}'>" + "".join(cells) + "</tr>")
 
-    return f"""
-<style>
-.rt-wrap {{ max-height: 650px; overflow: auto; border: 1px solid #d9dde3; border-radius: 6px; }}
-table.rt {{ border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }}
-table.rt th {{
-  position: sticky; top: 0; background: #f5f7fa; padding: 6px 10px; text-align: left;
-  border-bottom: 1px solid #d9dde3; z-index: 1; cursor: pointer; user-select: none;
-}}
-table.rt th:hover {{ background: #e9edf3; }}
-table.rt th[data-sort="asc"]::after {{ content: " \\25B2"; color: #3B82F6; }}
-table.rt th[data-sort="desc"]::after {{ content: " \\25BC"; color: #3B82F6; }}
-table.rt td {{
-  padding: 5px 10px; border-bottom: 1px solid #eef0f3; max-width: 260px;
-  overflow: hidden; text-overflow: ellipsis;
-}}
-table.rt td.narrow {{ max-width: 88px; }}
-table.rt td.num {{ color: #999; text-align: right; max-width: 40px; }}
-table.rt tr.grp-even {{ background: #DCEBFC; }}
-table.rt tr.grp-odd {{ background: #FCEEDC; }}
-table.rt tbody tr:hover {{ background: #B8D4F5 !important; }}
-table.rt a {{ color: #3B82F6; text-decoration: none; }}
-table.rt a:hover {{ text-decoration: underline; }}
-table.rt .link {{ color: #3B82F6; cursor: pointer; }}
-table.rt .link:hover {{ text-decoration: underline; }}
-table.rt .grp-cell {{ cursor: help; text-decoration: underline dotted; }}
-table.rt .muted {{ color: #999; font-style: italic; }}
-</style>
+    return (
+        _TABLE_STYLE
+        + f"""
 <div class="rt-wrap">
   <table class="rt">
     <thead><tr>{header_cells}</tr></thead>
@@ -199,13 +234,14 @@ table.rt .muted {{ color: #999; font-style: italic; }}
   </table>
 </div>
 """
+    )
 
 
 # 표 안 '중개사ID'를 클릭하면(페이지 새로고침 없이) 파이썬으로 알려주는 CCv2 컴포넌트.
-# 동일매물 마우스오버 말풍선도 여기서 처리한다 — 브라우저 기본 title 툴팁은 글자 크기/줄간격을
-# 못 바꾸고 스크롤 영역 안에서 잘리기도 해서, position:fixed로 화면에 직접 띄우는 말풍선을 직접 그린다.
+# '동일매물' 클릭도 여기서 처리한다 — 마우스오버 말풍선으로 하니 내용이 길면 잘려서,
+# 클릭하면 파이썬 쪽에서 st.dialog 팝업으로 전체 목록을 보여주는 방식으로 바꿨다.
 # HTML은 render_results_table()에서 이미 다 만들어서 넘겨주고, JS는 그걸 그대로 붙여넣은 뒤
-# data-realtor 클릭 / data-grp-tooltip 마우스오버만 처리한다.
+# data-realtor / data-grp-payload 클릭만 처리한다.
 _REALTOR_TABLE = st.components.v2.component(
     "naver_land_results_table",
     html="<div id='rt-root'></div>",
@@ -215,46 +251,15 @@ export default function (component) {
   const root = parentElement.querySelector('#rt-root')
   root.innerHTML = data.html || ""
 
-  let tip = document.getElementById('rt-grp-tooltip')
-  if (!tip) {
-    tip = document.createElement('div')
-    tip.id = 'rt-grp-tooltip'
-    tip.style.cssText = [
-      'position:fixed', 'z-index:2147483647', 'display:none',
-      'background:#2b2f38', 'color:#fff', 'padding:12px 16px', 'border-radius:8px',
-      'font-size:15px', 'line-height:2', 'white-space:pre',
-      'max-height:70vh', 'overflow-y:auto',
-      'box-shadow:0 4px 16px rgba(0,0,0,.3)', 'pointer-events:none',
-    ].join(';')
-    document.body.appendChild(tip)
-  }
-
-  root.onmouseover = (e) => {
-    const cell = e.target.closest('[data-grp-tooltip]')
-    if (cell) {
-      tip.textContent = cell.dataset.grpTooltip
-      const r = cell.getBoundingClientRect()
-      tip.style.display = 'block'
-      const tipW = tip.offsetWidth
-      const tipH = tip.offsetHeight
-      let left = r.left
-      if (left + tipW > window.innerWidth - 8) left = window.innerWidth - tipW - 8
-      tip.style.left = Math.max(8, left) + 'px'
-      let top = r.bottom + 6
-      if (top + tipH > window.innerHeight - 8) top = r.top - tipH - 6
-      tip.style.top = Math.max(8, top) + 'px'
-    }
-  }
-  root.onmouseout = (e) => {
-    if (e.target.closest('[data-grp-tooltip]')) {
-      tip.style.display = 'none'
-    }
-  }
-
   root.onclick = (e) => {
-    const target = e.target.closest('[data-realtor]')
-    if (target) {
-      setTriggerValue('realtor_click', target.dataset.realtor)
+    const realtorTarget = e.target.closest('[data-realtor]')
+    if (realtorTarget) {
+      setTriggerValue('realtor_click', realtorTarget.dataset.realtor)
+      return
+    }
+    const grpTarget = e.target.closest('[data-grp-payload]')
+    if (grpTarget) {
+      setTriggerValue('group_click', grpTarget.dataset.grpPayload)
     }
   }
 
@@ -307,14 +312,16 @@ def render_interactive_table(
     is_dialog: bool = False,
     tooltip_source: pd.DataFrame | None = None,
 ):
-    """결과 표를 그려서 보여주고, '중개사ID'가 클릭됐으면 그 값을 반환한다(없으면 None)."""
+    """결과 표를 그려서 보여준다. '중개사ID' 클릭값과 '동일매물' 클릭값(JSON 문자열)을
+    (realtor_click, group_click) 튜플로 반환한다(클릭 없으면 각각 None)."""
     html_str = render_results_table(df, group_view, is_dialog=is_dialog, tooltip_source=tooltip_source)
     result = _REALTOR_TABLE(
         data={"html": html_str},
         key=key,
         on_realtor_click_change=lambda: None,
+        on_group_click_change=lambda: None,
     )
-    return result.realtor_click
+    return result.realtor_click, result.group_click
 
 
 def _close_realtor_dialog():
@@ -411,20 +418,53 @@ def _show_realtor_ads(realtor_id: str):
         ref_pool = st.session_state.realtor_ads_cache[ref_pool_key]
         tooltip_source = ref_pool if not ref_pool.empty else None
 
-        clicked = render_interactive_table(
+        clicked, group_clicked = render_interactive_table(
             sub, group_view=False, key="dialog_table", is_dialog=True, tooltip_source=tooltip_source,
         )
         if clicked and clicked != realtor_id:
             st.session_state.selected_realtor_id = clicked
+            st.rerun()
+        if group_clicked:
+            st.session_state.selected_realtor_id = None
+            st.session_state.selected_group_info = json.loads(group_clicked)
             st.rerun()
     if st.button("닫기"):
         _close_realtor_dialog()
         st.rerun()
 
 
-st.set_page_config(page_title="대치스카이부동산", layout="wide")
+def _close_group_popup():
+    st.session_state.selected_group_info = None
+
+
+@st.dialog(" ", width="large", on_dismiss=_close_group_popup)
+def _show_group_popup():
+    """'동일매물' 클릭 시 그 매물을 올린 모든 부동산/가격을 보여주는 팝업.
+    예전엔 마우스오버 말풍선으로 보여줬는데, 매물이 많으면(그룹1(40) 같은 경우) 내용이
+    화면 밖으로 잘려서 클릭 팝업으로 바꿨다."""
+    info = st.session_state.selected_group_info or {}
+    title = info.get("title", "")
+    rows = info.get("rows", [])
+    st.html(
+        f"<div style='color:#000; font-size:1.3rem; font-weight:700; margin-bottom:10px;'>"
+        f"{html_lib.escape(str(title))}</div>"
+    )
+    table_rows = [
+        [_esc(r.get("date", "")), _esc(r.get("realtor", "")), _esc(r.get("price", ""))]
+        for r in rows
+    ]
+    html_str = render_sortable_table(["날짜", "광고 부동산", "광고금액"], table_rows, compact=True)
+    # 클릭/정렬 JS를 새로 만들 필요 없이 메인 표와 같은 컴포넌트를 재사용한다 — 이 표에는
+    # data-realtor/data-grp-payload가 없어서 클릭 핸들러는 그냥 아무 반응 없이 넘어가고,
+    # 헤더 클릭 정렬만 그대로 동작한다.
+    _REALTOR_TABLE(data={"html": html_str}, key="group_popup_table")
+    if st.button("닫기", key="close_group_popup"):
+        _close_group_popup()
+        st.rerun()
+
 
 # 기본 여백이 커서 요청에 따라 상단/헤딩/알림 박스 여백을 줄임 (native config로는 조절 불가)
+# 페이지 설정(st.set_page_config)은 통합 진입점인 main_app.py에서 한 번만 호출한다.
 st.html("""
 <style>
 .block-container { padding-top: 2.5rem; padding-bottom: 1rem; }
@@ -450,12 +490,13 @@ if "complex_pool_cache" not in st.session_state:
     st.session_state.complex_pool_cache = {}
 if "selected_realtor_id" not in st.session_state:
     st.session_state.selected_realtor_id = None
+if "selected_group_info" not in st.session_state:
+    st.session_state.selected_group_info = None
 if "realtor_ads_cache" not in st.session_state:
     st.session_state.realtor_ads_cache = {}
 
 # ====================== 사이드바: 검색 & 수집 ======================
 with st.sidebar:
-    st.markdown("## 🏠 대치스카이부동산")
     st.header("1. 단지 검색")
 
     st.caption("자주 찾는 단지 (여러 개 동시 선택 가능)")
@@ -684,18 +725,22 @@ else:
     result_df = filtered[display_cols].reset_index(drop=True)
     result_df.index = result_df.index + 1
 
-    clicked_realtor = render_interactive_table(result_df, group_view, key="main_table")
+    clicked_realtor, group_clicked = render_interactive_table(result_df, group_view, key="main_table")
     if clicked_realtor:
         st.session_state.selected_realtor_id = clicked_realtor
+    if group_clicked:
+        st.session_state.selected_group_info = json.loads(group_clicked)
 
     st.caption(
         f"필터 적용 결과: {len(result_df)}건 / 전체 {len(df)}건 · "
         "특징을 클릭하면 광고가 새 탭으로, 중개사ID를 클릭하면 그 부동산의 전체 광고 매물이 열립니다 · "
-        "동일매물에 마우스를 올리면 같은 매물을 올린 다른 부동산과 가격을 볼 수 있습니다"
+        "동일매물을 클릭하면 같은 매물을 올린 다른 부동산과 가격을 팝업으로 볼 수 있습니다"
     )
 
     if st.session_state.get("selected_realtor_id"):
         _show_realtor_ads(st.session_state.selected_realtor_id)
+    if st.session_state.get("selected_group_info"):
+        _show_group_popup()
 
     export_df = result_df.drop(columns=["_group_id", "매물번호"], errors="ignore")
     buf = io.BytesIO()

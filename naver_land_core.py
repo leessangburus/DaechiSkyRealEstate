@@ -69,6 +69,8 @@ FIELD_LABELS = {
     "articleConfirmYmd": "확인날짜",
     "buildingName": "동",
     "sameAddrCnt": "동일매물수",
+    "sameAddrMinPrc": "_동일매물최저가",
+    "sameAddrMaxPrc": "_동일매물최고가",
     "cpName": "부동산업체",
     "realtorName": "중개사무소",
     "realtorId": "중개사ID",
@@ -90,6 +92,29 @@ DISPLAY_COLUMNS = [
 PREFERRED_COLUMN_ORDER = DISPLAY_COLUMNS + [
     "가격(만원)", "공급면적(㎡)", "전용면적(㎡)", "부동산업체", "태그", "매물링크",
 ]
+
+# 동일매물 그룹핑에 쓰는 키. "층"이 저/중/고 구간이고 "면적타입"도 세부 호수 구분이 없어서
+# 단지/동/층/면적타입/구분만으로는 버킷이 넓다 — 서로 다른 실제 동일매물 그룹이 우연히 같은
+# 버킷에 겹쳐 들어와 잘못 합쳐질 수 있다(예: 래미안대치팰리스 107동 고/30 113A 매매에
+# sameAddrCnt=40인 그룹과 sameAddrCnt=2인 그룹이 공존). 네이버가 sameAddrCnt와 함께 내려주는
+# 동일매물 최저가/최고가는 실제 같은 그룹 안에서는 멤버 전원이 정확히 같은 값을 갖는 정밀한
+# 지문이라, 존재하면 그룹 키에 추가해 이런 충돌을 없앤다. naver_land_app.py의 중개사 교차대조
+# 팝업도 동일한 함수로 키를 계산해서 로직이 두 곳에서 따로 갈라지지 않게 한다. 지문 컬럼이
+# 없는 데이터(과거 캐시, 다른 응답 형태 등)에서는 자동으로 기존 5개 컬럼 기준으로 후퇴한다.
+#
+# sameAddrCnt("동일매물수") 자체는 지문에서 뺐다 — 단지별 매물목록 API(complex-scoped)는
+# 정확한 값을 주지만, 중개사 전체매물 API(realtorId 기반, fetch_realtor_articles)는 이 값을
+# 항상 1로만 내려줘서(실측 확인됨) 두 출처를 섞어 비교하는 중개사 팝업 교차대조에서 키가
+# 어긋나 버린다. 반면 최저가/최고가는 두 API 모두 동일한 실제 값을 주는 걸 확인해서, 이
+# 두 개만으로 지문을 구성한다 — 여전히 40명/2명 그룹을 정확히 분리하기에 충분하다.
+GROUP_KEY_COLS = ["단지명", "동", "층", "면적타입", "구분"]
+GROUP_FINGERPRINT_COLS = ["_동일매물최저가", "_동일매물최고가"]
+
+
+def dup_group_key_cols(df: pd.DataFrame) -> list:
+    """df에 실제로 존재하는 지문 컬럼까지 반영한, 동일매물 그룹핑에 쓸 최종 키 컬럼 목록."""
+    return GROUP_KEY_COLS + [c for c in GROUP_FINGERPRINT_COLS if c in df.columns]
+
 
 SQM_PER_PYEONG = 3.305785
 REALTOR_SUFFIXES_TO_STRIP = ["부동산중개사무소", "공인중개사사무소"]
@@ -352,14 +377,19 @@ def _postprocess(df: pd.DataFrame) -> pd.DataFrame:
     # 4개 호수가 있는데 하나로 묶임). 그래서 네이버가 이미 계산해서 내려주는
     # "동일매물수"(sameAddrCnt)가 1보다 큰, 즉 네이버 자신도 동일 주소로 보는 매물만
     # 후보로 삼고, 그 후보들 안에서만 단지/동/층/면적타입/구분으로 세부 그룹을 나눈다.
+    # 이 5개 키만으로도 여전히 버킷이 넓어서(예: 래미안대치팰리스 107동 고/30 113A 매매에
+    # 40명짜리 그룹과 2명짜리 그룹이 공존) 동일매물 최저가/최고가까지 지문으로 추가해
+    # 더 세분화한다(dup_group_key_cols).
     # 화면에서 서로 알아볼 수 있게 "그룹N(개수)" 형태로 표시한다. 그룹에 속하지 않으면 빈 값.
     # _group_id는 화면에는 안 보이지만 정렬/색상 구분에 쓰는 숨김 컬럼.
-    group_cols = ["단지명", "동", "층", "면적타입", "구분"]
+    group_cols = GROUP_KEY_COLS
     if all(c in df.columns for c in group_cols):
         if "동일매물수" in df.columns:
             naver_dup_flag = pd.to_numeric(df["동일매물수"], errors="coerce").fillna(1) > 1
         else:
             naver_dup_flag = pd.Series(True, index=df.index)
+
+        group_cols = dup_group_key_cols(df)
 
         group_id_col = pd.Series(pd.NA, index=df.index, dtype="Int64")
         label_col = pd.Series("단독", index=df.index, dtype="object")
@@ -473,9 +503,6 @@ async def fetch_realtor_articles(realtor_id: str, log=print) -> pd.DataFrame:
         return pd.DataFrame()
 
     return _postprocess(pd.DataFrame(clean_row(a) for a in articles))
-
-
-GROUP_KEY_COLS = ["단지명", "동", "층", "면적타입", "구분"]
 
 
 async def fetch_group_reference_pool(

@@ -39,10 +39,16 @@ REGION_PRESETS = {
     "강남구": {"lawd_cd": "11680"},
     "서초구": {"lawd_cd": "11650"},
     "송파구": {"lawd_cd": "11710"},
-    # naver_land_core.QUICK_COMPLEXES와 같은 4개 단지(대팰/우성/선경/sk뷰)
+    # 사용자가 명시한 딱 6개 단지: 래미안대치팰리스/선경1차(1동-7동)/선경2차(8동-12동)/
+    # 개포우성1/개포우성2/대치SKVIEW. "개포우성"/"선경"처럼 부분일치로 걸렀더니 전혀 무관한
+    # 개포우성3차(법정동: 개포동)·선경3차까지 같이 잡혔던 적이 있어, "이 6개만"을 확실히 하려고
+    # 부분일치(apt_name_contains) 대신 완전일치(apt_name_equals)로 지정한다.
     "4단지": {
         "lawd_cd": "11680",
-        "apt_name_contains": ["래미안대치팰리스", "개포우성", "선경", "대치SKVIEW"],
+        "apt_name_equals": [
+            "래미안대치팰리스", "선경1차(1동-7동)", "선경2차(8동-12동)",
+            "개포우성1", "개포우성2", "대치SKVIEW",
+        ],
     },
     "대치동": {"lawd_cd": "11680", "dong_equals": "대치동"},
     "도곡동": {"lawd_cd": "11680", "dong_equals": "도곡동"},
@@ -50,11 +56,13 @@ REGION_PRESETS = {
 
 
 def apply_region_preset(df: pd.DataFrame, preset: dict) -> pd.DataFrame:
-    """REGION_PRESETS의 후처리 필터(dong_equals/apt_name_contains)를 df에 적용."""
+    """REGION_PRESETS의 후처리 필터(dong_equals/apt_name_equals/apt_name_contains)를 df에 적용."""
     if df.empty:
         return df
     if "dong_equals" in preset and "법정동" in df.columns:
         df = df[df["법정동"] == preset["dong_equals"]]
+    if "apt_name_equals" in preset and "단지명" in df.columns:
+        df = df[df["단지명"].isin(preset["apt_name_equals"])]
     if "apt_name_contains" in preset and "단지명" in df.columns:
         pattern = "|".join(preset["apt_name_contains"])
         df = df[df["단지명"].str.contains(pattern, case=False, na=False)]
@@ -105,6 +113,21 @@ def sigungu_lawd_cd(sido: str, sigungu_name: str) -> str:
         if item["name"] == sigungu_name:
             return item["code"]
     return None
+
+
+@lru_cache(maxsize=1)
+def _sigungu_name_index() -> dict:
+    """{"LAWD_CD(5자리)": "시군구 이름"} 형태의 code -> name 역방향 조회 인덱스."""
+    index = {}
+    for items in load_sigungu_codes().values():
+        for item in items:
+            index[item["code"]] = item["name"]
+    return index
+
+
+def sigungu_name_by_code(lawd_cd: str) -> str:
+    """실거래가 응답의 지역코드(sggCd)를 시군구 이름으로 되돌린다. 못 찾으면 코드 그대로 반환."""
+    return _sigungu_name_index().get(str(lawd_cd), str(lawd_cd))
 
 
 # 시군구(LAWD_CD 5자리) -> 읍면동 이름 목록. 같은 원본자료에서 뽑아낸 것으로,
@@ -320,6 +343,150 @@ def _to_dataframe(raw_items: list) -> pd.DataFrame:
 
     df = df.rename(columns=FIELD_LABELS)
     ordered = [c for c in DISPLAY_COLUMNS if c in df.columns]
+    remaining = [c for c in df.columns if c not in ordered]
+    return df[ordered + remaining]
+
+
+# ============================================================
+# 국토교통부_아파트 전월세 실거래가 자료 (RTMSDataSvcAptRent)
+# 매매와 요청 방식(LAWD_CD+DEAL_YMD, REST GET, XML, 에러코드 체계)이 동일해서
+# _parse_xml_items/ERROR_CODE_MESSAGES/AptTradeApiError/month_range를 그대로 재사용한다.
+# 인증키도 매매와 같은 공공데이터포털 활용신청 번들일 수 있지만, 관리 편의상 별도
+# 항목(MOLIT_RENT_SERVICE_KEY)으로 secrets.toml에 둔다.
+# ============================================================
+RENT_SERVICE_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent"
+RENT_SERVICE_KEY_ENV = "MOLIT_RENT_SERVICE_KEY"
+
+RENT_FIELD_LABELS = {
+    "sggCd": "지역코드",
+    "umdNm": "법정동",
+    # 기술문서상 항목명은 "아파트명"이지만, apply_region_preset()/APT_MERGE_GROUPS 등
+    # 기존 "단지명" 기준 로직을 매매와 공용으로 쓰기 위해 동일하게 맞춘다.
+    "aptNm": "단지명",
+    "jibun": "지번",
+    "excluUseAr": "전용면적",
+    "dealYear": "계약년도",
+    "dealMonth": "계약월",
+    "dealDay": "계약일",
+    "deposit": "보증금액",
+    "monthlyRent": "월세금액",
+    "floor": "층",
+    "buildYear": "건축년도",
+    "contractTerm": "계약기간",
+    "contractType": "계약구분",
+    "useRRRight": "갱신요구권사용",
+    "preDeposit": "종전계약보증금",
+    "preMonthlyRent": "종전계약월세",
+    "roadnm": "도로명",
+    "roadnmsggcd": "도로명시군구코드",
+    "roadnmcd": "도로명코드",
+    "roadnmseq": "도로명일련번호코드",
+    "roadnmbcd": "도로명지상지하코드",
+    "roadnmbonbun": "도로명건물본번호코드",
+    "roadnmbubun": "도로명건물부번호코드",
+    "aptSeq": "단지일련번호",
+}
+
+# 화면 요청이 "일단 모든 데이터를 다 보여달라"라서, 매매처럼 컬럼을 추려내지 않고
+# 전 필드를 포함하되 핵심 정보가 앞에 오도록만 순서를 잡는다.
+RENT_DISPLAY_COLUMNS = [
+    "단지명", "법정동", "지번", "전용면적", "층",
+    "보증금액", "월세금액",
+    "계약년도", "계약월", "계약일",
+    "계약기간", "계약구분", "갱신요구권사용", "종전계약보증금", "종전계약월세",
+    "건축년도",
+    "도로명", "도로명시군구코드", "도로명코드", "도로명일련번호코드",
+    "도로명지상지하코드", "도로명건물본번호코드", "도로명건물부번호코드", "단지일련번호",
+]
+
+
+def fetch_apt_rents_raw(lawd_cd: str, deal_ymd: str, service_key: str = None) -> list:
+    """지역코드 + 계약년월 1건에 대해 전체 페이지를 모아 raw dict 리스트로 반환 (전월세)."""
+    key = resolve_service_key(service_key, RENT_SERVICE_KEY_ENV)
+    all_items = []
+    page_no = 1
+
+    with httpx.Client(timeout=20) as client:
+        while True:
+            params = {
+                "serviceKey": key,
+                "LAWD_CD": lawd_cd,
+                "DEAL_YMD": deal_ymd,
+                "pageNo": page_no,
+                "numOfRows": MAX_NUM_OF_ROWS,
+            }
+
+            retry = 0
+            while True:
+                try:
+                    resp = client.get(RENT_SERVICE_URL, params=params)
+                    resp.raise_for_status()
+                    break
+                except httpx.HTTPError as exc:
+                    retry += 1
+                    if retry > MAX_RETRY:
+                        raise RuntimeError(f"전월세 실거래가 API 요청이 계속 실패합니다: {exc}") from exc
+                    time.sleep(RETRY_WAIT_SEC * retry)
+
+            items, _, _, total_count = _parse_xml_items(resp.text)
+            all_items.extend(items)
+
+            if page_no * MAX_NUM_OF_ROWS >= total_count:
+                break
+            page_no += 1
+
+    return all_items
+
+
+def fetch_apt_rents(lawd_cd: str, deal_ymd: str, service_key: str = None) -> pd.DataFrame:
+    """지역코드 + 계약년월 1건을 조회해서 정리된 DataFrame으로 반환 (전월세)."""
+    raw_items = fetch_apt_rents_raw(lawd_cd, deal_ymd, service_key)
+    return _rent_to_dataframe(raw_items)
+
+
+def fetch_apt_rents_range(
+    lawd_cd: str,
+    start_ym: str,
+    end_ym: str,
+    service_key: str = None,
+    on_progress=None,
+) -> pd.DataFrame:
+    """계약년월 범위를 한 달씩 순회 조회해서 하나의 DataFrame으로 합친다 (전월세).
+
+    on_progress(deal_ymd, index, total)이 주어지면 달마다 호출한다 (진행률 표시용).
+    """
+    months = month_range(start_ym, end_ym)
+    all_items = []
+    for i, ym in enumerate(months, start=1):
+        try:
+            all_items.extend(fetch_apt_rents_raw(lawd_cd, ym, service_key))
+        except AptTradeApiError as exc:
+            if exc.code != "03":  # 데이터없음은 정상 케이스이므로 통과
+                raise
+        if on_progress:
+            on_progress(ym, i, len(months))
+    return _rent_to_dataframe(all_items)
+
+
+def _rent_to_dataframe(raw_items: list) -> pd.DataFrame:
+    if not raw_items:
+        return pd.DataFrame(columns=RENT_DISPLAY_COLUMNS)
+
+    df = pd.DataFrame(raw_items)
+
+    for col in ("deposit", "monthlyRent", "preDeposit", "preMonthlyRent"):
+        if col in df.columns:
+            df[col] = (
+                df[col].astype(str).str.replace(",", "", regex=False).apply(pd.to_numeric, errors="coerce")
+            )
+    if "excluUseAr" in df.columns:
+        df["excluUseAr"] = pd.to_numeric(df["excluUseAr"], errors="coerce")
+    for col in ("dealYear", "dealMonth", "dealDay", "floor", "buildYear"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    df = df.rename(columns=RENT_FIELD_LABELS)
+    ordered = [c for c in RENT_DISPLAY_COLUMNS if c in df.columns]
     remaining = [c for c in df.columns if c not in ordered]
     return df[ordered + remaining]
 
