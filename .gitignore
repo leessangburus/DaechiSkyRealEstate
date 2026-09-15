@@ -5,6 +5,7 @@ __pycache__/
 # PyInstaller
 build/
 dist/
+dist_package/
 
 # Secrets
 .streamlit/secrets.toml
