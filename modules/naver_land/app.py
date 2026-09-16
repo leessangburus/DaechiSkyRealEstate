@@ -28,9 +28,13 @@ import streamlit as st
 import sys
 import pathlib
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+# modules/naver_land/app.py 기준 프로젝트 루트(2단계 위). "modules" 패키지를
+# 절대 import(from modules.naver_land import core)로 찾으려면 루트가 sys.path에 있어야 한다.
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-import core
+from modules.naver_land import core
 
 
 def _dong_sort_key(dong: str):

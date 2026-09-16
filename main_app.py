@@ -127,7 +127,7 @@ def _main_view() -> None:
 
     pages = {
         "naver": st.Page("modules/naver_land/app.py", title="데이터수집"),
-        "apt": st.Page("apt_trade_app.py", title="실거래확인"),
+        "apt": st.Page("modules/apt_trade/app.py", title="실거래확인"),
     }
     pg = st.navigation([pages[active_page]], position="hidden")
     pg.run()
