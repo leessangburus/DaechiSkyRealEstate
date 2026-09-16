@@ -10,7 +10,7 @@
     {
       "name": "naver-land-app",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "streamlit", "run", "naver_land_app.py", "--server.headless", "true"],
+      "runtimeArgs": ["-m", "streamlit", "run", "modules/naver_land/app.py", "--server.headless", "true"],
       "port": 8501
     },
     {

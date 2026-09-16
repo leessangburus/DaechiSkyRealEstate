@@ -3,8 +3,8 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ('main_app.py', '.'),
-    ('naver_land_app.py', '.'),
-    ('naver_land_core.py', '.'),
+    ('modules/naver_land/app.py', 'modules/naver_land'),
+    ('modules/naver_land/core.py', 'modules/naver_land'),
     ('apt_trade_app.py', '.'),
     ('apt_trade_core.py', '.'),
     ('sigungu_codes.json', '.'),
@@ -12,7 +12,7 @@ datas = [
     ('.streamlit', '.streamlit'),
 ]
 binaries = []
-hiddenimports = ['naver_land_core', 'apt_trade_core']
+hiddenimports = ['apt_trade_core']
 tmp_ret = collect_all('streamlit')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

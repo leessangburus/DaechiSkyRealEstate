@@ -6,9 +6,9 @@
 
 ## 실행 방법
 - 통합 앱(로그인 포함, 실제 운영과 동일): `python -m streamlit run main_app.py --server.port 8505`
-- 네이버 부동산 화면만 단독 테스트: `python -m streamlit run naver_land_app.py`
+- 네이버 부동산 화면만 단독 테스트: `python -m streamlit run modules/naver_land/app.py`
 - 아파트 실거래가 화면만 단독 테스트: `python -m streamlit run apt_trade_app.py --server.port 8502`
-- 위 실행 설정은 `.claude/launch.json`에도 정의되어 있습니다. 아직 `naver_land`/`apt_trade`는 `modules/`로 실제 이동하지 않았으므로 현재는 기존 경로를 사용합니다. 실제 마이그레이션이 완료되면 `modules/naver_land/app.py`, `modules/apt_trade/app.py`로 이 경로들을 함께 갱신합니다.
+- 위 실행 설정은 `.claude/launch.json`에도 정의되어 있습니다. `naver_land`는 이미 `modules/naver_land/`로 이전이 완료되어 위 경로를 그대로 사용합니다. `apt_trade`는 아직 루트에 있으며, 실제 이전이 완료되면 `modules/apt_trade/app.py`로 이 경로를 갱신합니다.
 
 ## 아키텍처 원칙
 
@@ -92,9 +92,9 @@ naver_land
 
 ## 현재 구조 (2026-09-15 기준)
 
-현재 프로젝트는 기존 단일 파일 구조이며, 향후 기존 기능을 기능별 독립 모듈 구조로 단계적으로 전환할 계획입니다.
+`naver_land` 기능은 기능별 독립 모듈 구조로 이전이 완료되었습니다. `apt_trade`는 아직 기존 단일 파일 구조이며, 향후 같은 방식으로 이전할 계획입니다.
 
-**모듈 폴더 준비 상태**: `modules/naver_land/`, `modules/apt_trade/`, `modules/property/`, `modules/customer/`, `modules/consultation/`, `modules/academy/`, `modules/commercial/`, `modules/market/` 빈 폴더가 이미 생성되어 있습니다. 다만 현재는 전부 빈 폴더이며, 실제 Python 파일은 하나도 옮겨지지 않았습니다. 모든 코드는 여전히 기존 루트 위치(`naver_land_app.py` 등)에 그대로 있습니다.
+**모듈 폴더 준비 상태**: `modules/naver_land/`, `modules/apt_trade/`, `modules/property/`, `modules/customer/`, `modules/consultation/`, `modules/academy/`, `modules/commercial/`, `modules/market/` 폴더가 생성되어 있습니다. 이 중 `modules/naver_land/`만 실제 코드가 채워져 있고, 나머지 7개는 아직 빈 폴더입니다.
 
 **현재 핵심 실행 파일**
 - `main_app.py` — 로그인 + 네비게이션 (통합 진입점). 업무 로직을 넣지 않는다.
@@ -102,15 +102,16 @@ naver_land
 
 **기존 기능**
 
-현재 다음 두 기능은 이미 구현되어 있으며 독립 기능으로 운영되고 있습니다.
-- 네이버 부동산 — 기존 `naver_land_app.py` + `naver_land_core.py` (+ 보조 CLI 스크립트 `naver_land_scraper.py`, 모듈 이전 시 포함 여부는 이전 검토 대상)
-- 아파트 실거래가 — 기존 `apt_trade_app.py` + `apt_trade_core.py`
+- 네이버 부동산 — **`modules/naver_land/`로 이전 완료.** `app.py`(Streamlit UI) + `core.py`(네이버 부동산 API/수집 핵심 로직) + `scraper.py`(화면 없이 단독 실행하는 CLI 수집 도구). 기존 루트의 `naver_land_app.py`, `naver_land_core.py`, `naver_land_scraper.py`는 삭제되었습니다.
+- 아파트 실거래가 — 기존 `apt_trade_app.py` + `apt_trade_core.py` (아직 루트에 위치, 이전 예정)
 
 두 기능은 서로 직접 import하지 않는 독립 구조입니다.
 
-**모듈 전환 (예정, 아직 시작 전)**
+**naver_land 모듈 이전 완료 기록**: standalone 실행 → main_app 통합 실행 → PyInstaller EXE 실행 → 실제 Naver Land API 수집 → scraper.py 독립 실행 및 API 수집까지 순서대로 검증을 마쳤습니다.
 
-기존 파일은 기능별 독립 모듈 구조에 맞춰 단계적으로 이동할 예정입니다. 기본 형태는 다음과 같습니다.
+**apt_trade 모듈 전환 (예정, 아직 시작 전)**
+
+기존 파일은 naver_land와 같은 방식으로 단계적으로 이동할 예정입니다. 기본 형태는 다음과 같습니다.
 
 ```
 modules/<도메인>/
@@ -118,9 +119,9 @@ modules/<도메인>/
 └─ core.py
 ```
 
-필요한 경우 해당 모듈 안에서만 `components.py`, `config.py`, `trade.py`, `rent.py`, `scraper.py` 등을 추가할 수 있습니다. 어떤 파일을 추가할지는 실제 이전 작업 시점에 모듈별로 판단하며, 지금 미리 전부 확정하지 않습니다. (예: `naver_land_scraper.py`를 `modules/naver_land/`에 포함시킬지는 아직 결정하지 않았고, 실제 이전 단계에서 현재 역할을 다시 확인한 후 정합니다.)
+필요한 경우 해당 모듈 안에서만 `components.py`, `config.py`, `trade.py`, `rent.py` 등을 추가할 수 있습니다. 어떤 파일을 추가할지는 실제 이전 작업 시점에 판단하며, 지금 미리 확정하지 않습니다.
 
-실제 파일 이동은 한 번에 여러 기능을 동시에 변경하지 않고, 모듈을 하나씩 골라 다음 순서로 진행합니다: (1) 파일 이전 → (2) import/경로 수정 → (3) 해당 모듈 단독 실행 테스트 → (4) 통합 앱 실행 테스트. 정상 확인 전에는 다음 모듈로 넘어가지 않습니다. (이전 검토 단계에서 만들어졌던 빈 `features/apt_trade/`, `features/naver_land/` 폴더는 이 `modules/` 원칙이 확정되기 전의 이름이며, 실제 마이그레이션 대상이 아닙니다. 처리 방향은 별도 승인 후 결정합니다.)
+실제 파일 이동은 한 번에 여러 기능을 동시에 변경하지 않고, 다음 순서로 진행합니다: (1) 파일 이전 → (2) import/경로 수정 → (3) 해당 모듈 단독 실행 테스트 → (4) 통합 앱 실행 테스트. 정상 확인 전에는 다음 모듈로 넘어가지 않습니다. (이전 검토 단계에서 만들어졌던 빈 `features/apt_trade/`, `features/naver_land/` 폴더는 이 `modules/` 원칙이 확정되기 전의 이름이며, 실제 마이그레이션 대상이 아닙니다. 처리 방향은 별도 승인 후 결정합니다.)
 
 ## 개발 원칙 (반드시 지킬 것)
 

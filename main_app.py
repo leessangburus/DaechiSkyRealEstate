@@ -2,7 +2,7 @@
 """
 대치스카이부동산 통합 프로그램 진입점 (Streamlit)
 
-로그인 후 좌측 상단 버튼으로 "데이터수집"(naver_land_app.py)과
+로그인 후 좌측 상단 버튼으로 "데이터수집"(modules/naver_land/app.py)과
 "실거래확인"(apt_trade_app.py) 화면을 전환한다. 버튼을 누를 때마다
 해당 프로그램의 세션 데이터를 모두 비워서 항상 초기화된 상태로 연다.
 
@@ -126,7 +126,7 @@ def _main_view() -> None:
         return
 
     pages = {
-        "naver": st.Page("naver_land_app.py", title="데이터수집"),
+        "naver": st.Page("modules/naver_land/app.py", title="데이터수집"),
         "apt": st.Page("apt_trade_app.py", title="실거래확인"),
     }
     pg = st.navigation([pages[active_page]], position="hidden")

@@ -25,7 +25,12 @@ import re
 import pandas as pd
 import streamlit as st
 
-import naver_land_core as core
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import core
 
 
 def _dong_sort_key(dong: str):

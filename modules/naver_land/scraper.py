@@ -2,18 +2,23 @@
 """
 네이버 부동산 매물 수집 CLI 스크립트 (단일 단지, 커맨드라인용).
 
-검색 UI가 필요하면 naver_land_app.py(Streamlit 앱)를 사용하세요.
-이 스크립트는 naver_land_core.py의 로직을 그대로 사용합니다.
+검색 UI가 필요하면 modules/naver_land/app.py(Streamlit 앱)를 사용하세요.
+이 스크립트는 modules/naver_land/core.py의 로직을 그대로 사용합니다.
 
 사용법:
   pip install httpx pandas openpyxl
-  python naver_land_scraper.py
+  python modules/naver_land/scraper.py
 """
 
 import asyncio
 import time
 
-import naver_land_core as core
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import core
 
 COMPLEX_NO = "180280"       # 래미안대치팰리스
 COMPLEX_LABEL = "래미안대치팰리스"
