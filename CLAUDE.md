@@ -7,8 +7,8 @@
 ## 실행 방법
 - 통합 앱(로그인 포함, 실제 운영과 동일): `python -m streamlit run main_app.py --server.port 8505`
 - 네이버 부동산 화면만 단독 테스트: `python -m streamlit run modules/naver_land/app.py`
-- 아파트 실거래가 화면만 단독 테스트: `python -m streamlit run apt_trade_app.py --server.port 8502`
-- 위 실행 설정은 `.claude/launch.json`에도 정의되어 있습니다. `naver_land`는 이미 `modules/naver_land/`로 이전이 완료되어 위 경로를 그대로 사용합니다. `apt_trade`는 아직 루트에 있으며, 실제 이전이 완료되면 `modules/apt_trade/app.py`로 이 경로를 갱신합니다.
+- 아파트 실거래가 화면만 단독 테스트: `python -m streamlit run modules/apt_trade/app.py --server.port 8502`
+- 위 실행 설정은 `.claude/launch.json`에도 정의되어 있습니다. `naver_land`, `apt_trade` 모두 `modules/<도메인>/`로 이전이 완료되어 위 경로를 그대로 사용합니다. `apt_trade`는 standalone/통합 실행/PyInstaller EXE 검증까지 완료된 상태입니다.
 
 ## 아키텍처 원칙
 
@@ -37,7 +37,7 @@ modules/
 ```
 
 각 모듈은 하나의 독립된 업무 단위로 생각합니다.
-예를 들어 `apt_trade` 모듈은 아파트 매매·전세·월세 실거래와 관련된 UI, 데이터 처리, 조회 로직 등을 가능한 한 `modules/apt_trade/` 내부에서 관리합니다.
+예를 들어 `apt_trade` 모듈은 아파트 매매·전세·월세 실거래와 관련된 UI, 데이터 처리, 조회 로직 등을 `modules/apt_trade/` 내부에서 관리합니다(실제로 이전이 완료된 현재 구조, 아래 "현재 구조" 절 참고).
 모듈 규모가 커지면 하나의 파일에 모든 기능을 넣지 않고 해당 모듈 내부에서 파일을 적절히 분리합니다.
 예:
 
@@ -90,46 +90,54 @@ naver_land
 
 개별 업무의 상세 비즈니스 로직은 `main_app.py`에 넣지 않습니다.
 
-## 현재 구조 (2026-09-15 기준)
+## 현재 구조 (2026-09-17 기준)
 
-`naver_land` 기능은 기능별 독립 모듈 구조로 이전이 완료되었습니다. `apt_trade`는 아직 기존 단일 파일 구조이며, 향후 같은 방식으로 이전할 계획입니다.
+`naver_land`, `apt_trade` 두 기능 모두 기능별 독립 모듈 구조로 이전이 완료되었습니다.
 
-**모듈 폴더 준비 상태**: `modules/naver_land/`, `modules/apt_trade/`, `modules/property/`, `modules/customer/`, `modules/consultation/`, `modules/academy/`, `modules/commercial/`, `modules/market/` 폴더가 생성되어 있습니다. 이 중 `modules/naver_land/`만 실제 코드가 채워져 있고, 나머지 7개는 아직 빈 폴더입니다.
+**모듈 폴더 준비 상태**: `modules/naver_land/`, `modules/apt_trade/`, `modules/property/`, `modules/customer/`, `modules/consultation/`, `modules/academy/`, `modules/commercial/`, `modules/market/` 폴더가 생성되어 있습니다. 이 중 `modules/naver_land/`와 `modules/apt_trade/`는 실제 코드가 채워져 있고, 나머지 6개(`property`, `customer`, `consultation`, `academy`, `commercial`, `market`)는 아직 빈 폴더입니다.
 
 **현재 핵심 실행 파일**
-- `main_app.py` — 로그인 + 네비게이션 (통합 진입점). 업무 로직을 넣지 않는다.
+- `main_app.py` — 로그인 + 네비게이션 (통합 진입점). `st.Page`로 `modules/naver_land/app.py`(데이터수집)와 `modules/apt_trade/app.py`(실거래확인)를 연결한다. 업무 로직을 넣지 않는다.
 - `desktop_app.py` — PyInstaller 패키징용 실행기 (pywebview 창으로 Streamlit 서버를 감쌈).
+- `modules/naver_land/app.py` — 네이버 부동산 데이터수집 화면
+- `modules/apt_trade/app.py` — 아파트 실거래가 확인 화면
 
 **기존 기능**
 
 - 네이버 부동산 — **`modules/naver_land/`로 이전 완료.** `app.py`(Streamlit UI) + `core.py`(네이버 부동산 API/수집 핵심 로직) + `scraper.py`(화면 없이 단독 실행하는 CLI 수집 도구). 기존 루트의 `naver_land_app.py`, `naver_land_core.py`, `naver_land_scraper.py`는 삭제되었습니다.
-- 아파트 실거래가 — 기존 `apt_trade_app.py` + `apt_trade_core.py` (아직 루트에 위치, 이전 예정)
+- 아파트 실거래가 — **`modules/apt_trade/`로 이전 완료.** `app.py`(Streamlit UI) + `core.py`(국토부 실거래가 API 핵심 로직) + `sigungu_codes.json`/`dong_codes.json`(지역 코드 데이터). 기존 루트의 `apt_trade_app.py`, `apt_trade_core.py`, `sigungu_codes.json`, `dong_codes.json`은 삭제되었습니다.
 
 두 기능은 서로 직접 import하지 않는 독립 구조입니다.
 
 **naver_land 모듈 이전 완료 기록**: standalone 실행 → main_app 통합 실행 → PyInstaller EXE 실행 → 실제 Naver Land API 수집 → scraper.py 독립 실행 및 API 수집까지 순서대로 검증을 마쳤습니다.
 
-**apt_trade 모듈 전환 (예정, 아직 시작 전)**
+**apt_trade 모듈 전환 완료 기록**
 
-기존 파일은 naver_land와 같은 방식으로 단계적으로 이동할 예정입니다. 기본 형태는 다음과 같습니다.
+- `modules/apt_trade/__init__.py` 추가로 정식 Python 패키지화.
+- `app.py`/`core.py`를 `import apt_trade_core as core` 방식에서 `from modules.apt_trade import core` 절대 패키지 import로 변경.
+- `sigungu_codes.json`, `dong_codes.json`을 `modules/apt_trade/`로 이동(경로 계산은 `Path(__file__).resolve().parent` 기준이라 코드 변경 없이 정상 동작).
+- `main_app.py`가 `modules/apt_trade/app.py`를 `st.Page`로 사용하도록 전환.
+- naver_land와 apt_trade가 각각 bare `import core`를 쓰면서 발생했던 `sys.modules['core']` 충돌 문제를, `modules/`, `modules/naver_land/`, `modules/apt_trade/`에 `__init__.py`를 두고 `from modules.<도메인> import core` 절대 패키지 import로 바꿔 해결.
+- Streamlit 통합 실행(실거래확인 ↔ 데이터수집 메뉴 전환 반복)으로 정상 동작 검증 완료.
+- PyInstaller EXE 빌드·실행 테스트 완료. 이 과정에서 EXE 실행 시 `ModuleNotFoundError: No module named 'httpx'`가 발생했는데, `datas`에만 등록된 `.py` 파일은 PyInstaller의 정적 import 분석 대상이 아니기 때문이었다. `hiddenimports`에 실제 모듈 경로를 명시해 해결했다(빌드/패키징 원칙 절 참고).
+- 현재 `DaechiSkyRealEstate.spec`의 `hiddenimports`는 다음 5개를 사용한다.
+  ```
+  modules.apt_trade.app
+  modules.apt_trade.core
+  modules.naver_land.app
+  modules.naver_land.core
+  modules.naver_land.scraper
+  ```
 
-```
-modules/<도메인>/
-├─ app.py
-└─ core.py
-```
-
-필요한 경우 해당 모듈 안에서만 `components.py`, `config.py`, `trade.py`, `rent.py` 등을 추가할 수 있습니다. 어떤 파일을 추가할지는 실제 이전 작업 시점에 판단하며, 지금 미리 확정하지 않습니다.
-
-실제 파일 이동은 한 번에 여러 기능을 동시에 변경하지 않고, 다음 순서로 진행합니다: (1) 파일 이전 → (2) import/경로 수정 → (3) 해당 모듈 단독 실행 테스트 → (4) 통합 앱 실행 테스트. 정상 확인 전에는 다음 모듈로 넘어가지 않습니다. (이전 검토 단계에서 만들어졌던 빈 `features/apt_trade/`, `features/naver_land/` 폴더는 이 `modules/` 원칙이 확정되기 전의 이름이며, 실제 마이그레이션 대상이 아닙니다. 처리 방향은 별도 승인 후 결정합니다.)
+앞으로 새 도메인(`property`, `customer` 등)을 옮기거나 새로 만들 때는 위와 같은 방식(패키지화 → 절대 import → `main_app.py`/`.claude/launch.json`/`.spec` 갱신 → 단독 실행 테스트 → 통합 실행 테스트 → PyInstaller 테스트)을 따른다. 한 번에 여러 기능을 동시에 변경하지 않고, 하나의 모듈 단위로 변경 → 실행 테스트 → 확인 과정을 거친다. (이전 검토 단계에서 만들어졌던 빈 `features/apt_trade/`, `features/naver_land/` 폴더는 이 `modules/` 원칙이 확정되기 전의 이름이며, 실제 마이그레이션 대상이 아닙니다. 처리 방향은 별도 승인 후 결정합니다.)
 
 ## 개발 원칙 (반드시 지킬 것)
 
-1. 새 기능은 가능하면 처음부터 `modules/<도메인>/` 아래 독립 모듈로 만든다. 기존의 `~_core.py` + `~_app.py` 방식은 현재 파일을 모듈로 이전하는 과도기에서만 사용하며, 새로운 기능의 기본 구조로 사용하지 않는다.
+1. 새 기능은 처음부터 `modules/<도메인>/` 아래 독립 모듈(패키지)로 만든다. 과거 naver_land/apt_trade를 루트의 `~_core.py` + `~_app.py` 방식에서 `modules/<도메인>/`로 이전하는 과도기에 그 방식을 거쳐 간 적이 있으나, 두 기능 모두 이전이 완료된 지금은 더 이상 사용하지 않는 과거 방식이며, 새 기능의 기본 구조로 사용하지 않는다.
 2. 각 모듈은 가능한 한 자체적으로 UI, 비즈니스 로직, 데이터 처리, 설정, 컴포넌트를 관리한다.
 3. 기능(도메인)끼리 서로 직접 import하지 않는다. 꼭 필요한 경우라도 먼저 사용자에게 구조와 의존관계를 설명하고 승인받는다.
 4. `main_app.py`는 전체 프로그램의 진입점과 로그인 및 페이지/메뉴 연결을 담당하며 개별 업무의 상세 로직을 포함하지 않는다.
-5. 파일을 새로 만들거나 옮길 때는 `DaechiSkyRealEstate.spec`(datas/hiddenimports), `.claude/launch.json`, `main_app.py`의 `st.Page` 경로를 함께 확인한다.
+5. 파일을 새로 만들거나 옮길 때는 `DaechiSkyRealEstate.spec`(datas/hiddenimports), `.claude/launch.json`, `main_app.py`의 `st.Page` 경로를 함께 확인한다. 특히 `datas`에만 등록한 `.py` 파일은 PyInstaller가 import를 분석하지 않으므로, `modules/<도메인>/`처럼 동적으로 연결되는 모듈은 `hiddenimports`에도 실제 모듈 경로(예: `modules.apt_trade.core`)를 명시해야 그 모듈이 쓰는 외부 라이브러리(예: `httpx`)까지 함께 번들된다(빌드 및 패키징 원칙 절 참고).
 6. `.streamlit/secrets.toml`의 키 구조를 임의로 바꾸지 않는다. API 키, 비밀번호 등 민감정보를 코드에 직접 저장하지 않는다.
 7. 빌드 산출물(`build/`, `dist/`, `dist_package/`)은 Git에 커밋하지 않는다.
 8. 정상 작동하는 기존 기능을 불필요하게 다시 작성하지 않는다. 파일 삭제/이동 전에는 실제 사용 여부와 import 관계를 먼저 확인한다.
@@ -157,6 +165,8 @@ modules/<도메인>/
 - `desktop_app.py`는 PyInstaller 패키징용 진입점이다.
 - `DaechiSkyRealEstate.spec`는 패키징에 필요한 Python 파일, 데이터 파일, hidden imports 등을 관리한다.
 - Python 파일을 이동하거나 새로 추가하면 `.spec` 파일의 `datas` 및 `hiddenimports` 등을 함께 확인한다.
+- **`datas`와 `hiddenimports`의 차이(실제 검증된 내용)**: `datas`는 파일을 그대로 복사만 할 뿐, PyInstaller의 정적 import 분석(modulegraph) 대상이 아니다. 반면 `hiddenimports`에 명시한 모듈은 PyInstaller가 실제로 분석해서 그 모듈이 import하는 외부 라이브러리까지 함께 찾아 번들한다. `modules/apt_trade/`, `modules/naver_land/`처럼 `st.Page`로 동적으로 연결되는 모듈은 `datas`(파일 복사)와 `hiddenimports`(의존성 분석) 양쪽에 모두 등록해야 한다. 이를 놓치면 EXE 실행 시 `ModuleNotFoundError`(예: `httpx` 누락)가 실행 시점에야 드러난다.
+- 현재 `DaechiSkyRealEstate.spec`의 `hiddenimports`는 `modules.apt_trade.app`, `modules.apt_trade.core`, `modules.naver_land.app`, `modules.naver_land.core`, `modules.naver_land.scraper` 5개를 사용한다.
 - 빌드 산출물인 `build/`, `dist/`, `dist_package/`는 Git에 커밋하지 않는다.
 - 패키징 관련 구조를 변경할 경우 실제 실행 가능한지 확인한다.
 
@@ -195,5 +205,6 @@ modules/<도메인>/
 
 ## 참고 문서
 - [docs/프로젝트_가이드.md](docs/프로젝트_가이드.md) — 전체 구조, 실행 흐름, 의존관계, 설정/secrets, 빌드 구조, 향후 확장 방향 상세
+- [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) — 현재 실제 코드 기준 폴더 구조, 파일별 역할, 모듈 간 의존관계, PyInstaller `datas`/`hiddenimports` 상세 (가장 최신 구조 문서)
 - [NAVER_LAND_LESSONS.md](NAVER_LAND_LESSONS.md) — 네이버 부동산 API/스크래핑 관련 노하우 (여전히 유효)
-- [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) — 2026-09-08 시점 스냅샷 (현재는 `docs/프로젝트_가이드.md`가 최신 기준)
+- [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) — 2026-09-08 시점 스냅샷 (현재는 `docs/프로젝트_가이드.md`, `docs/PROJECT_STRUCTURE.md`가 최신 기준)

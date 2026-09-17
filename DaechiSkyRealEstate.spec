@@ -5,14 +5,20 @@ datas = [
     ('main_app.py', '.'),
     ('modules/naver_land/app.py', 'modules/naver_land'),
     ('modules/naver_land/core.py', 'modules/naver_land'),
-    ('apt_trade_app.py', '.'),
-    ('apt_trade_core.py', '.'),
-    ('sigungu_codes.json', '.'),
-    ('dong_codes.json', '.'),
+    ('modules/apt_trade/app.py', 'modules/apt_trade'),
+    ('modules/apt_trade/core.py', 'modules/apt_trade'),
+    ('modules/apt_trade/sigungu_codes.json', 'modules/apt_trade'),
+    ('modules/apt_trade/dong_codes.json', 'modules/apt_trade'),
     ('.streamlit', '.streamlit'),
 ]
 binaries = []
-hiddenimports = ['apt_trade_core']
+hiddenimports = [
+    'modules.apt_trade.app',
+    'modules.apt_trade.core',
+    'modules.naver_land.app',
+    'modules.naver_land.core',
+    'modules.naver_land.scraper',
+]
 tmp_ret = collect_all('streamlit')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
